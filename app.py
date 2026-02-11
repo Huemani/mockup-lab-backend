@@ -26,10 +26,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Temporary hardcoded values for testing
-CLOUDINARY_CLOUD_NAME = "ducsuev69"
-CLOUDINARY_API_KEY = "185639338576382"  # Finn i Cloudinary dashboard
-CLOUDINARY_API_SECRET = "EN9TmnbIMMj2KzQ678CwlHMbP_M"  # Finn i Cloudinary dashboard
+# Load from environment variables
+CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME")
+CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY")
+CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET")
 
 print("=" * 50)
 print("CLOUDINARY CONFIGURATION CHECK:")
