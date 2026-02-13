@@ -1,5 +1,4 @@
-FCMD ["python"39
-ROM python:3.11-slim
+FROM python:3.11-slim
 
 # Declare build args (Railway passes these at build time)
 ARG CLOUDINARY_CLOUD_NAME
@@ -36,5 +35,5 @@ COPY app.py .
 # Expose port
 EXPOSE 8000
 
-# Run
+# Run uvicorn directly (not via python app.py)
 CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"]
