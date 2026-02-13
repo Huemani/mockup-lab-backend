@@ -1,4 +1,5 @@
-FROM python:3.11-slim
+FCMD ["python"39
+ROM python:3.11-slim
 
 # Declare build args (Railway passes these at build time)
 ARG CLOUDINARY_CLOUD_NAME
