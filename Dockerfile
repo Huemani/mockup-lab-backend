@@ -37,4 +37,4 @@ COPY app.py .
 EXPOSE 8000
 
 # Run
-CMD ["python", "app.py"]
+CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"]
