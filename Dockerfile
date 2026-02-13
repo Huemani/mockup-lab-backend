@@ -35,5 +35,5 @@ COPY app.py .
 # Expose port
 EXPOSE 8000
 
-# Run uvicorn directly (not via python app.py)
-CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Run uvicorn directly as foreground process
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
