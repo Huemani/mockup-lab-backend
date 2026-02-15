@@ -1,6 +1,7 @@
 # app.py - Main backend application
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import cv2
 import numpy as np
 import cloudinary
@@ -9,6 +10,7 @@ from io import BytesIO
 import os
 from PIL import Image
 from typing import Optional
+import requests
 
 # Initialize FastAPI
 app = FastAPI(
@@ -48,9 +50,22 @@ if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
 else:
     print("✗ Cloudinary configuration incomplete!")
 
-def read_image_file(file_bytes):
-    """Convert uploaded file bytes to OpenCV image"""
-    nparr = np.frombuffer(file_bytes, np.uint8)
+# Pydantic model for JSON request
+class MockupRequest(BaseModel):
+    tshirt_url: str
+    design_url: str
+    strength: int = 10
+    design_x: int = 0
+    design_y: int = 0
+    design_width: Optional[int] = None
+    design_height: Optional[int] = None
+
+def download_image_from_url(url: str):
+    """Download image from URL and convert to OpenCV format"""
+    response = requests.get(url, timeout=30)
+    response.raise_for_status()
+    
+    nparr = np.frombuffer(response.content, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     return img
 
@@ -220,8 +235,9 @@ async def root():
     return {
         "message": "Mockup Lab API", 
         "status": "running",
-        "version": "1.0.0",
-        "endpoints": ["/health", "/generate-mockup", "/docs"]
+        "version": "2.0.0",
+        "endpoints": ["/health", "/generate-mockup", "/docs"],
+        "accepts": "JSON with Cloudinary URLs"
     }
 
 @app.get("/health")
@@ -240,46 +256,40 @@ async def health_check():
     }
 
 @app.post("/generate-mockup")
-async def generate_mockup(
-    tshirt: UploadFile = File(...),
-    design: UploadFile = File(...),
-    strength: int = Form(10),
-    design_x: int = Form(0),
-    design_y: int = Form(0),
-    design_width: Optional[int] = Form(None),
-    design_height: Optional[int] = Form(None),
-):
+async def generate_mockup(request: MockupRequest):
     """
     Generate t-shirt mockup with optimal displacement mapping
+    Accepts JSON with Cloudinary URLs
     """
     try:
         print(f"\n{'='*60}")
-        print("MOCKUP GENERATION REQUEST")
+        print("MOCKUP GENERATION REQUEST (URL-based)")
         print(f"{'='*60}")
+        print(f"  T-shirt URL: {request.tshirt_url}")
+        print(f"  Design URL: {request.design_url}")
+        print(f"  Strength: {request.strength}")
         
-        # Read uploaded images
-        tshirt_bytes = await tshirt.read()
-        design_bytes = await design.read()
+        # Download images from URLs
+        print("→ Downloading t-shirt image...")
+        tshirt_img = download_image_from_url(request.tshirt_url)
         
-        tshirt_img = read_image_file(tshirt_bytes)
-        design_img = read_image_file(design_bytes)
+        print("→ Downloading design image...")
+        design_img = download_image_from_url(request.design_url)
         
         if tshirt_img is None or design_img is None:
-            raise HTTPException(status_code=400, detail="Invalid image format")
+            raise HTTPException(status_code=400, detail="Failed to download images from URLs")
         
         print(f"✓ Images loaded: tshirt {tshirt_img.shape}, design {design_img.shape}")
         
         # Default design dimensions
-        if design_width is None:
-            design_width = tshirt_img.shape[1] // 3
-        if design_height is None:
-            design_height = tshirt_img.shape[0] // 3
+        design_width = request.design_width or tshirt_img.shape[1] // 3
+        design_height = request.design_height or tshirt_img.shape[0] // 3
         
-        print(f"✓ Design placement: ({design_x}, {design_y}) size: {design_width}x{design_height}")
+        print(f"✓ Design placement: ({request.design_x}, {request.design_y}) size: {design_width}x{design_height}")
         
         # Place design
         design_placed = place_design_on_tshirt(
-            tshirt_img, design_img, design_x, design_y, design_width, design_height
+            tshirt_img, design_img, request.design_x, request.design_y, design_width, design_height
         )
         print("✓ Design placed on canvas")
         
@@ -297,7 +307,7 @@ async def generate_mockup(
         
         # Physical displacement field
         disp_x, disp_y = create_physical_displacement_field(
-            depth, normals, disp_map, strength
+            depth, normals, disp_map, request.strength
         )
         print("✓ Displacement field generated")
         
@@ -339,6 +349,9 @@ async def generate_mockup(
             "public_id": upload_result['public_id']
         }
         
+    except requests.RequestException as e:
+        print(f"\n✗ ERROR downloading images: {str(e)}\n")
+        raise HTTPException(status_code=400, detail=f"Failed to download images: {str(e)}")
     except Exception as e:
         print(f"\n✗ ERROR: {str(e)}\n")
         import traceback
