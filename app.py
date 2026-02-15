@@ -50,15 +50,21 @@ if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
 else:
     print("✗ Cloudinary configuration incomplete!")
 
-# Pydantic model for JSON request
+# Pydantic models matching frontend
+class Position(BaseModel):
+    x: int
+    y: int
+
 class MockupRequest(BaseModel):
-    tshirt_url: str
-    design_url: str
-    strength: int = 10
-    design_x: int = 0
-    design_y: int = 0
-    design_width: Optional[int] = None
-    design_height: Optional[int] = None
+    baseImageUrl: str
+    designImageUrl: str
+    canvasWidth: int
+    canvasHeight: int
+    basePosition: Position
+    baseScale: float
+    position: Position
+    scale: float
+    displacementStrength: int = 10
 
 def download_image_from_url(url: str):
     """Download image from URL and convert to OpenCV format"""
@@ -70,9 +76,7 @@ def download_image_from_url(url: str):
     return img
 
 def estimate_depth_simple(image):
-    """
-    Simple depth estimation from shading
-    """
+    """Simple depth estimation from shading"""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     depth = 255 - gray
     depth = cv2.GaussianBlur(depth, (21, 21), 0)
@@ -80,9 +84,7 @@ def estimate_depth_simple(image):
     return depth
 
 def create_displacement_from_best_channel(image):
-    """
-    Create displacement map by selecting channel with most contrast
-    """
+    """Create displacement map by selecting channel with most contrast"""
     b, g, r = cv2.split(image)
     channels = [b, g, r]
     std_devs = [np.std(ch) for ch in channels]
@@ -100,9 +102,7 @@ def create_displacement_from_best_channel(image):
     return blurred
 
 def compute_normals_from_depth(depth_map):
-    """
-    Compute surface normals from depth map
-    """
+    """Compute surface normals from depth map"""
     grad_x = cv2.Sobel(depth_map.astype(np.float32), cv2.CV_64F, 1, 0, ksize=5)
     grad_y = cv2.Sobel(depth_map.astype(np.float32), cv2.CV_64F, 0, 1, ksize=5)
     
@@ -119,9 +119,7 @@ def compute_normals_from_depth(depth_map):
     return normals
 
 def create_physical_displacement_field(depth_map, normal_map, disp_map, strength=10):
-    """
-    Create physically-aware displacement field
-    """
+    """Create physically-aware displacement field"""
     h, w = depth_map.shape
     
     depth_norm = (depth_map.astype(float) - depth_map.min()) / (depth_map.max() - depth_map.min() + 1e-6)
@@ -142,9 +140,7 @@ def create_physical_displacement_field(depth_map, normal_map, disp_map, strength
     return disp_x.astype(np.float32), disp_y.astype(np.float32)
 
 def apply_dense_warp(image, disp_x, disp_y):
-    """
-    Apply dense displacement field to warp image
-    """
+    """Apply dense displacement field to warp image"""
     h, w = image.shape[:2]
     
     x_coords = np.arange(w).reshape(1, -1).repeat(h, axis=0).astype(np.float32)
@@ -164,9 +160,7 @@ def apply_dense_warp(image, disp_x, disp_y):
     return warped
 
 def intelligent_blend(tshirt, design, normal_map, depth_map, design_opacity=0.85):
-    """
-    Intelligent blending of design with t-shirt
-    """
+    """Intelligent blending of design with t-shirt"""
     if tshirt.shape[:2] != design.shape[:2]:
         design = cv2.resize(design, (tshirt.shape[1], tshirt.shape[0]))
     
@@ -197,9 +191,7 @@ def intelligent_blend(tshirt, design, normal_map, depth_map, design_opacity=0.85
     return result
 
 def resize_design_to_region(design, region_width, region_height):
-    """
-    Resize design to fit within region while maintaining aspect ratio
-    """
+    """Resize design to fit within region while maintaining aspect ratio"""
     design_h, design_w = design.shape[:2]
     
     scale_w = region_width / design_w
@@ -213,9 +205,7 @@ def resize_design_to_region(design, region_width, region_height):
     return resized
 
 def place_design_on_tshirt(tshirt, design, x, y, width, height):
-    """
-    Place design on specific region of t-shirt
-    """
+    """Place design on specific region of t-shirt"""
     design_resized = resize_design_to_region(design, width, height)
     canvas = np.zeros_like(tshirt)
     
@@ -237,7 +227,7 @@ async def root():
         "status": "running",
         "version": "2.0.0",
         "endpoints": ["/health", "/generate-mockup", "/docs"],
-        "accepts": "JSON with Cloudinary URLs"
+        "accepts": "JSON with Cloudinary URLs (frontend contract)"
     }
 
 @app.get("/health")
@@ -259,37 +249,42 @@ async def health_check():
 async def generate_mockup(request: MockupRequest):
     """
     Generate t-shirt mockup with optimal displacement mapping
-    Accepts JSON with Cloudinary URLs
+    Accepts JSON matching frontend contract
     """
     try:
         print(f"\n{'='*60}")
-        print("MOCKUP GENERATION REQUEST (URL-based)")
+        print("MOCKUP GENERATION REQUEST")
         print(f"{'='*60}")
-        print(f"  T-shirt URL: {request.tshirt_url}")
-        print(f"  Design URL: {request.design_url}")
-        print(f"  Strength: {request.strength}")
+        print(f"  Base Image URL: {request.baseImageUrl}")
+        print(f"  Design Image URL: {request.designImageUrl}")
+        print(f"  Canvas: {request.canvasWidth}x{request.canvasHeight}")
+        print(f"  Position: ({request.position.x}, {request.position.y})")
+        print(f"  Scale: {request.scale}")
+        print(f"  Displacement Strength: {request.displacementStrength}")
         
         # Download images from URLs
-        print("→ Downloading t-shirt image...")
-        tshirt_img = download_image_from_url(request.tshirt_url)
+        print("→ Downloading base image (t-shirt)...")
+        tshirt_img = download_image_from_url(request.baseImageUrl)
         
         print("→ Downloading design image...")
-        design_img = download_image_from_url(request.design_url)
+        design_img = download_image_from_url(request.designImageUrl)
         
         if tshirt_img is None or design_img is None:
             raise HTTPException(status_code=400, detail="Failed to download images from URLs")
         
         print(f"✓ Images loaded: tshirt {tshirt_img.shape}, design {design_img.shape}")
         
-        # Default design dimensions
-        design_width = request.design_width or tshirt_img.shape[1] // 3
-        design_height = request.design_height or tshirt_img.shape[0] // 3
+        # Calculate design dimensions based on scale
+        design_width = int(tshirt_img.shape[1] * request.scale * 0.3)  # 30% of width at scale 1
+        design_height = int(tshirt_img.shape[0] * request.scale * 0.3)
         
-        print(f"✓ Design placement: ({request.design_x}, {request.design_y}) size: {design_width}x{design_height}")
+        print(f"✓ Design placement: ({request.position.x}, {request.position.y}) size: {design_width}x{design_height}")
         
         # Place design
         design_placed = place_design_on_tshirt(
-            tshirt_img, design_img, request.design_x, request.design_y, design_width, design_height
+            tshirt_img, design_img, 
+            request.position.x, request.position.y, 
+            design_width, design_height
         )
         print("✓ Design placed on canvas")
         
@@ -307,7 +302,7 @@ async def generate_mockup(request: MockupRequest):
         
         # Physical displacement field
         disp_x, disp_y = create_physical_displacement_field(
-            depth, normals, disp_map, request.strength
+            depth, normals, disp_map, request.displacementStrength
         )
         print("✓ Displacement field generated")
         
@@ -343,11 +338,8 @@ async def generate_mockup(request: MockupRequest):
         print(f"✓ Upload successful: {upload_result['secure_url']}")
         print(f"{'='*60}\n")
         
-        return {
-            "success": True,
-            "mockup_url": upload_result['secure_url'],
-            "public_id": upload_result['public_id']
-        }
+        # Return URL directly (frontend expects string)
+        return upload_result['secure_url']
         
     except requests.RequestException as e:
         print(f"\n✗ ERROR downloading images: {str(e)}\n")
@@ -360,6 +352,6 @@ async def generate_mockup(request: MockupRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8000))
+    port = int(os.getenv("PORT", 8080))
     print(f"\nStarting Mockup Lab API on port {port}...")
     uvicorn.run(app, host="0.0.0.0", port=port)
