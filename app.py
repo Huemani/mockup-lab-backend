@@ -620,23 +620,40 @@ async def generate_mockup(request: MockupRequest):
         
         # --- 5b. Apply projected shadow to fabric (if embroidery) ---
         tshirt_with_shadow = tshirt_bgr.copy()
-        if shadow_mask is not None:
+        if shadow_mask is not None and np.sum(shadow_mask) > 0:
             print("→ Applying projected shadow to fabric...")
-            # Warp shadow mask same as design (so shadow follows displacement)
+            
+            # Recreate warp coordinates from displacement map (same as design warping)
+            h, w = shadow_mask.shape[:2]
+            disp_resized = cv2.resize(disp_map, (w, h), interpolation=cv2.INTER_LINEAR)
+            disp_normalized = (disp_resized.astype(np.float32) - 128.0) / 128.0
+            disp_pixels = disp_normalized * request.displacementStrength
+            disp_pixels = cv2.GaussianBlur(disp_pixels, (15, 15), 0)
+            
+            x_coords = np.arange(w, dtype=np.float32).reshape(1, -1).repeat(h, axis=0)
+            y_coords = np.arange(h, dtype=np.float32).reshape(-1, 1).repeat(w, axis=1)
+            
+            map_x = x_coords + disp_pixels
+            map_y = y_coords + disp_pixels
+            
+            # Warp shadow mask
             warped_shadow = cv2.remap(
                 shadow_mask,
-                disp_map[:, :, 0],
-                disp_map[:, :, 1],
+                map_x,
+                map_y,
                 interpolation=cv2.INTER_LINEAR,
                 borderMode=cv2.BORDER_CONSTANT,
                 borderValue=0
             )
+            
             # Darken fabric where shadow falls
-            shadow_darkening = (warped_shadow * 40).astype(np.int16)  # Up to -40 brightness
+            shadow_darkening = (warped_shadow * 40).astype(np.int16)
             tshirt_with_shadow = tshirt_bgr.astype(np.int16)
             tshirt_with_shadow -= shadow_darkening[:, :, np.newaxis]
             tshirt_with_shadow = np.clip(tshirt_with_shadow, 0, 255).astype(np.uint8)
             print("✓ Projected shadow applied to fabric")
+        else:
+            print("→ No shadow mask to apply")
 
         # --- 6. Composite warped design onto t-shirt ---
         print("→ Compositing design onto t-shirt...")
