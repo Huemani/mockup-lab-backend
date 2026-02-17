@@ -294,6 +294,8 @@ async def generate_mockup(request: MockupRequest):
         print(f"  Position:         ({request.position.x}, {request.position.y})")
         print(f"  Scale:            {request.scale}")
         print(f"  Displacement:     {request.displacementStrength}")
+        print(f"  Shadow Strength:  {request.shadowStrength}")
+        print(f"  Opacity:          {request.opacity}")
 
         # --- 1. Download images ---
         print("\n→ Downloading t-shirt image...")
