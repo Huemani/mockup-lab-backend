@@ -190,7 +190,7 @@ def generate_simple_stitch_pattern(design_alpha, angle=45, spacing=3):
     Args:
         design_alpha: grayscale alpha channel (0-255)
         angle: stitch direction in degrees (0=horizontal, 45=diagonal, 90=vertical)
-        spacing: pixels between stitch lines
+        spacing: pixels between stitch lines (default 3 for dense realistic look)
     
     Returns:
         Grayscale image with white stitch lines on black background
@@ -212,7 +212,7 @@ def generate_simple_stitch_pattern(design_alpha, angle=45, spacing=3):
     
     print(f"   Stitch generation: {w}x{h} canvas, angle={angle}°, spacing={spacing}px, drawing {num_lines*2} lines")
     
-    # Draw parallel lines
+    # Draw parallel lines with thickness=2 for more visible stitches
     lines_drawn = 0
     for i in range(-num_lines, num_lines):
         offset = i * spacing
@@ -232,8 +232,8 @@ def generate_simple_stitch_pattern(design_alpha, angle=45, spacing=3):
             x2 = int(w/2 + offset * perp_dx + t2 * dx)
             y2 = int(h/2 + offset * perp_dy + t2 * dy)
             
-            # Draw line
-            cv2.line(stitch_pattern, (x1, y1), (x2, y2), 255, 1)
+            # Draw thicker line (thickness=2 instead of 1)
+            cv2.line(stitch_pattern, (x1, y1), (x2, y2), 255, 2)
             lines_drawn += 1
     
     print(f"   Stitch generation: Drew {lines_drawn} lines, pattern max={stitch_pattern.max()}, non-zero pixels before mask={np.count_nonzero(stitch_pattern)}")
@@ -310,8 +310,8 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     grad_x = -cv2.Sobel(dist_transform, cv2.CV_32F, 1, 0, ksize=5)
     grad_y = -cv2.Sobel(dist_transform, cv2.CV_32F, 0, 1, ksize=5)
     
-    # Only process pixels near edges
-    edge_mask = (dist_transform > 0) & (dist_transform < 0.3)
+    # WIDER edge mask for smoother gradients (was 0.3, now 0.5)
+    edge_mask = (dist_transform > 0) & (dist_transform < 0.5)
     edge_mask_float = edge_mask.astype(np.float32)
     
     # Normalize gradients
@@ -327,9 +327,9 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     highlight_mask = np.clip(light_facing, 0, None)
     shadow_mask_edge = np.clip(-light_facing, 0, None)
     
-    # Blur for smooth gradients
-    highlight_mask = cv2.GaussianBlur(highlight_mask, (7, 7), 0)
-    shadow_mask_edge = cv2.GaussianBlur(shadow_mask_edge, (7, 7), 0)
+    # STRONGER blur for smooth gradients (was 7x7, now 11x11)
+    highlight_mask = cv2.GaussianBlur(highlight_mask, (11, 11), 0)
+    shadow_mask_edge = cv2.GaussianBlur(shadow_mask_edge, (11, 11), 0)
     
     # Normalize
     if highlight_mask.max() > 0:
@@ -337,20 +337,20 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     if shadow_mask_edge.max() > 0:
         shadow_mask_edge = shadow_mask_edge / shadow_mask_edge.max()
     
-    # Apply bevel
+    # Apply bevel with REDUCED strength for subtler effect
     embroidered_bgr = design_bgr.copy().astype(np.float32)
-    embroidered_bgr -= shadow_mask_edge[:, :, np.newaxis] * 50
-    embroidered_bgr += highlight_mask[:, :, np.newaxis] * 60
+    embroidered_bgr -= shadow_mask_edge[:, :, np.newaxis] * 40  # Was 50, now 40
+    embroidered_bgr += highlight_mask[:, :, np.newaxis] * 50     # Was 60, now 50
     embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
     
-    print(f"  Embroidery: ✓ Directional bevel")
+    print(f"  Embroidery: ✓ Smooth directional bevel")
     
     # ==================================================================
     # STEP 2: STITCH PATTERN + ANISOTROPIC SHINE
     # ==================================================================
     
-    # Generate stitches
-    stitch_pattern = generate_simple_stitch_pattern(alpha, angle=45, spacing=stitch_spacing)
+    # Generate stitches with DENSE spacing (3px)
+    stitch_pattern = generate_simple_stitch_pattern(alpha, angle=45, spacing=3)
     kernel = np.ones((2, 2), np.uint8)
     stitch_thick = cv2.dilate(stitch_pattern, kernel, iterations=1)
     
@@ -730,7 +730,7 @@ async def generate_mockup(request: MockupRequest):
             design_canvas, shadow_mask = apply_embroidery_effect(
                 design_canvas,
                 stitch_angle=45,  # Will be auto-detected inside function
-                stitch_spacing=5  # Updated to match realistic spacing
+                stitch_spacing=3  # Dense spacing for realistic embroidery
             )
             print("✓ Embroidery effect applied")
             print(f"   Design canvas after embroidery: {design_canvas.shape}")
