@@ -183,36 +183,52 @@ def place_and_resize_design(tshirt_shape, design_bgra, pos_x, pos_y, design_widt
 
 def alpha_composite_design(tshirt_bgr, warped_design_bgra, tshirt_bgr_original):
     """
-    Composite the warped design onto the t-shirt using proper alpha blending.
-    Then apply a Multiply pass with the t-shirt texture to add realistic
-    shadow/highlight integration (replicates Photoshop's clipping mask + Multiply).
+    Composite the warped design onto the t-shirt with realistic shadow/highlight integration.
 
     Steps:
-    1. Alpha-composite warped design over t-shirt
-    2. Blend Multiply result back at low opacity for fabric shadow effect
+    1. Alpha-composite warped design cleanly over t-shirt
+    2. Extract luminance (light/dark info only) from t-shirt — no colour contamination
+    3. Apply luminance as Soft Light blend on top of composited result, only where design exists
+       This replicates Photoshop's clipping mask + Soft Light — shadows darken the design,
+       highlights brighten it, without altering its colours.
     """
-    h, w = tshirt_bgr.shape[:2]
-
     # Split warped design into BGR + alpha
     b, g, r, a = cv2.split(warped_design_bgra)
     design_bgr = cv2.merge([b, g, r])
     alpha_mask = a.astype(np.float32) / 255.0  # 0.0 to 1.0
+    alpha_3ch = alpha_mask[:, :, np.newaxis]
 
     tshirt_float = tshirt_bgr.astype(np.float32) / 255.0
     design_float = design_bgr.astype(np.float32) / 255.0
 
-    alpha_3ch = alpha_mask[:, :, np.newaxis]
-
-    # Step 1: Standard alpha composite
+    # Step 1: Clean alpha composite — no colour blending yet
     composited = design_float * alpha_3ch + tshirt_float * (1.0 - alpha_3ch)
 
-    # Step 2: Multiply blend — design × t-shirt — to pick up shadows/highlights
-    multiply = design_float * tshirt_float
+    # Step 2: Extract luminance from t-shirt (perceptual weights)
+    # This is pure light/dark information — no hue or saturation
+    luminance = (0.114 * tshirt_float[:,:,0] +
+                 0.587 * tshirt_float[:,:,1] +
+                 0.299 * tshirt_float[:,:,2])
+    luminance_3ch = luminance[:, :, np.newaxis]
 
-    # Blend multiply result back where design exists (at ~40% strength)
-    # This makes the design follow the fabric's light and dark areas
-    multiply_strength = 0.4
-    result = composited * (1.0 - multiply_strength * alpha_3ch) + multiply * (multiply_strength * alpha_3ch)
+    # Step 3: Soft Light blend formula (Photoshop-equivalent)
+    # For lum < 0.5: darkens (shadows)
+    # For lum > 0.5: brightens (highlights)
+    # Result stays close to design colour — no fabric colour contamination
+    soft_light = np.where(
+        luminance_3ch <= 0.5,
+        composited - (1.0 - 2.0 * luminance_3ch) * composited * (1.0 - composited),
+        composited + (2.0 * luminance_3ch - 1.0) * (
+            np.where(composited <= 0.25,
+                     ((16.0 * composited - 12.0) * composited + 4.0) * composited,
+                     np.sqrt(composited)) - composited
+        )
+    )
+
+    # Blend soft light result at controlled strength, only where design exists
+    # strength=0.5 means 50% shadow/highlight influence from fabric
+    shadow_strength = 0.5
+    result = composited * (1.0 - shadow_strength * alpha_3ch) + soft_light * (shadow_strength * alpha_3ch)
 
     result = np.clip(result * 255, 0, 255).astype(np.uint8)
     return result
