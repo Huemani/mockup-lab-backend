@@ -203,11 +203,11 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=6):
     """
     Apply embroidery effect to design image.
     
-    Pipeline:
-    1. Generate stitch pattern from design alpha
-    2. Create height map from stitches (for 3D effect)
-    3. Generate thread texture
-    4. Composite: design + height displacement + thread texture overlay
+    Simplified approach:
+    1. Generate visible stitch lines
+    2. Add subtle shadow/highlight along stitches (for depth)
+    3. Add thread shine on raised areas
+    4. NO warping of the design itself
     
     Args:
         design_bgra: Design with alpha channel (BGRA)
@@ -219,11 +219,11 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=6):
     """
     h, w = design_bgra.shape[:2]
     
-    # Extract alpha channel
+    # Extract alpha channel and BGR
     alpha = design_bgra[:, :, 3]
+    design_bgr = design_bgra[:, :, :3].copy()
     
     # Smart auto-detect stitch angle from design shape
-    # Use longer dimension to determine stitch direction
     if w > h * 1.3:  # Wider design → vertical stitches
         stitch_angle = 90
     elif h > w * 1.3:  # Taller design → horizontal stitches
@@ -233,68 +233,52 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=6):
     
     print(f"  Embroidery: Auto-detected stitch angle = {stitch_angle}° (design {w}x{h})")
     
-    # 1. Generate stitch pattern (increased spacing for visibility)
+    # 1. Generate stitch pattern
     stitch_pattern = generate_simple_stitch_pattern(alpha, angle=stitch_angle, spacing=stitch_spacing)
     
-    print(f"  Embroidery: Stitch pattern generated, max={stitch_pattern.max()}, mean={stitch_pattern.mean():.1f}")
+    print(f"  Embroidery: Generated {np.count_nonzero(stitch_pattern)} stitch pixels")
     
-    # 2. Create height map from stitches (blur for smooth 3D effect)
-    height_map = cv2.GaussianBlur(stitch_pattern, (11, 11), 0).astype(np.float32)
+    # 2. Create subtle depth effect along stitches
+    # Dilate stitches slightly to create "raised thread" area
+    kernel = np.ones((3, 3), np.uint8)
+    stitch_dilated = cv2.dilate(stitch_pattern, kernel, iterations=1)
     
-    # Normalize height map to 0-1 range for displacement
-    if height_map.max() > 0:
-        height_map = height_map / height_map.max()
+    # Create shadow mask (area just outside stitches)
+    stitch_shadow = cv2.dilate(stitch_dilated, kernel, iterations=1)
+    stitch_shadow = cv2.subtract(stitch_shadow, stitch_dilated)
     
-    # 3. Apply stronger height displacement to simulate raised threads
-    displacement_strength = 5.0  # pixels (increased from 2.0)
-    disp_x = np.zeros((h, w), dtype=np.float32)
-    disp_y = np.zeros((h, w), dtype=np.float32)
+    # 3. Apply depth: darken shadows, brighten highlights
+    depth_map = np.zeros((h, w), dtype=np.float32)
     
-    # Calculate gradients of height map for displacement direction
-    grad_x = cv2.Sobel(height_map, cv2.CV_32F, 1, 0, ksize=3)
-    grad_y = cv2.Sobel(height_map, cv2.CV_32F, 0, 1, ksize=3)
+    # Highlights on stitches (brighten by 15%)
+    depth_map[stitch_dilated > 0] = 0.15
     
-    disp_x = grad_x * displacement_strength
-    disp_y = grad_y * displacement_strength
+    # Shadows next to stitches (darken by 10%)
+    depth_map[stitch_shadow > 0] = -0.10
     
-    # Create remap coordinates
-    x_coords = np.arange(w, dtype=np.float32).reshape(1, -1).repeat(h, axis=0)
-    y_coords = np.arange(h, dtype=np.float32).reshape(-1, 1).repeat(w, axis=1)
+    # Apply depth to design
+    embroidered_bgr = design_bgr.copy().astype(np.float32)
+    for c in range(3):
+        embroidered_bgr[:, :, c] = embroidered_bgr[:, :, c] * (1.0 + depth_map)
     
-    map_x = x_coords + disp_x
-    map_y = y_coords + disp_y
+    embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
     
-    # Apply displacement to design
-    design_displaced = cv2.remap(
-        design_bgra,
-        map_x,
-        map_y,
-        interpolation=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REPLICATE
-    )
-    
-    # 4. Generate and apply thread texture (stronger variation)
-    thread_tex = generate_thread_texture((h, w))
-    
-    # Increase thread texture variation (0.6 to 1.4 instead of 0.8 to 1.2)
-    thread_tex_norm = (thread_tex.astype(np.float32) / 255.0) * 0.8 + 0.6
-    
-    # Apply thread texture to color channels (not alpha)
-    embroidered = design_displaced.copy()
-    for c in range(3):  # BGR channels
-        embroidered[:, :, c] = np.clip(
-            design_displaced[:, :, c].astype(np.float32) * thread_tex_norm,
-            0, 255
-        ).astype(np.uint8)
-    
-    # 5. Add stronger specular highlights for thread "shine"
-    specular = (height_map * 80).astype(np.uint8)  # Increased from 40
+    # 4. Add thread shine (specular highlights on raised stitches)
+    # Only on the actual stitch lines, not dilated area
+    shine_mask = stitch_pattern.astype(np.float32) / 255.0
+    shine_intensity = 30  # Add brightness
     
     for c in range(3):
-        embroidered[:, :, c] = np.clip(
-            embroidered[:, :, c].astype(np.int16) + specular,
+        embroidered_bgr[:, :, c] = np.clip(
+            embroidered_bgr[:, :, c].astype(np.int16) + (shine_mask * shine_intensity).astype(np.int16),
             0, 255
         ).astype(np.uint8)
+    
+    # 5. Combine with original alpha channel
+    embroidered = cv2.merge([embroidered_bgr[:, :, 0], 
+                             embroidered_bgr[:, :, 1], 
+                             embroidered_bgr[:, :, 2], 
+                             alpha])
     
     print(f"  Embroidery: Effect applied, output shape={embroidered.shape}")
     
