@@ -297,42 +297,71 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     print(f"  Embroidery: Simple uniform approach (design {w}x{h})")
     
     # ==================================================================
-    # STEP 1: ULTRA-SIMPLE BEVEL - Top/Bottom Split
+    # STEP 1: DIRECTIONAL EDGE BEVEL - Each edge gets appropriate light/shadow
     # ==================================================================
     
     # Detect design edges
     _, binary = cv2.threshold(alpha, 1, 255, cv2.THRESH_BINARY)
     
-    # Create edge ring around design
-    kernel_dilate = np.ones((6, 6), np.uint8)
-    dilated = cv2.dilate(binary, kernel_dilate, iterations=2)
-    edge_ring = cv2.subtract(dilated, binary).astype(np.float32) / 255.0
+    # Use distance transform to create smooth gradient from edges inward
+    dist_transform = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
     
-    # Split edge into top half (highlight) and bottom half (shadow)
-    # Pure Y-coordinate based - completely predictable
+    # Normalize distance transform
+    if dist_transform.max() > 0:
+        dist_transform = dist_transform / dist_transform.max()
     
-    # Shadow: bottom half of image (y > h/2)
-    shadow_mask = edge_ring.copy()
-    shadow_mask[:h//2, :] = 0  # Zero out top half
-    shadow_mask = cv2.GaussianBlur(shadow_mask, (9, 9), 0)
+    # Compute gradients to determine edge direction
+    grad_x = cv2.Sobel(dist_transform, cv2.CV_32F, 1, 0, ksize=5)
+    grad_y = cv2.Sobel(dist_transform, cv2.CV_32F, 0, 1, ksize=5)
     
-    # Highlight: top half of image (y < h/2)
-    highlight_mask = edge_ring.copy()
-    highlight_mask[h//2:, :] = 0  # Zero out bottom half
-    highlight_mask = cv2.GaussianBlur(highlight_mask, (9, 9), 0)
+    # Create edge mask (where distance is small = close to edge)
+    edge_mask = (dist_transform > 0) & (dist_transform < 0.3)  # Only pixels near edge
+    edge_mask_float = edge_mask.astype(np.float32)
     
-    # Apply bevel - moderate strength
+    # Light source from TOP-RIGHT (135° angle)
+    # Calculate how much each edge faces the light
+    
+    # Normalize gradients
+    grad_magnitude = np.sqrt(grad_x**2 + grad_y**2) + 1e-6
+    norm_grad_x = grad_x / grad_magnitude
+    norm_grad_y = grad_y / grad_magnitude
+    
+    # Light direction vector: (1, -1) normalized = top-right
+    light_x, light_y = 0.707, -0.707  # 45° from top-right
+    
+    # Dot product: how much each edge faces the light
+    # Positive = facing light (highlight), Negative = facing away (shadow)
+    light_facing = (norm_grad_x * light_x + norm_grad_y * light_y)
+    
+    # Apply edge mask - only at edges
+    light_facing = light_facing * edge_mask_float
+    
+    # Split into highlight and shadow
+    highlight_mask = np.clip(light_facing, 0, None)  # Positive values = faces light
+    shadow_mask = np.clip(-light_facing, 0, None)   # Negative values = faces away
+    
+    # Blur for smooth gradients
+    highlight_mask = cv2.GaussianBlur(highlight_mask, (7, 7), 0)
+    shadow_mask = cv2.GaussianBlur(shadow_mask, (7, 7), 0)
+    
+    # Normalize to 0-1
+    if highlight_mask.max() > 0:
+        highlight_mask = highlight_mask / highlight_mask.max()
+    if shadow_mask.max() > 0:
+        shadow_mask = shadow_mask / shadow_mask.max()
+    
+    # Apply bevel
     embroidered_bgr = design_bgr.copy().astype(np.float32)
     
-    # Darken bottom edges (shadow)
-    embroidered_bgr -= shadow_mask[:, :, np.newaxis] * 35
+    # Shadow on edges facing away from light
+    embroidered_bgr -= shadow_mask[:, :, np.newaxis] * 50
     
-    # Brighten top edges (highlight)
-    embroidered_bgr += highlight_mask[:, :, np.newaxis] * 45
+    # Highlight on edges facing toward light
+    embroidered_bgr += highlight_mask[:, :, np.newaxis] * 60
     
     embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
     
-    print(f"  Embroidery: Top/bottom bevel applied (shadow=-35, highlight=+45)")
+    print(f"  Embroidery: Directional edge bevel applied (light from top-right)")
     
     # ==================================================================
     # STEP 2: UNIFORM DIAGONAL STITCHES
