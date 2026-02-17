@@ -199,15 +199,15 @@ def generate_thread_texture(size=(256, 256)):
     return texture
 
 
-def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=6):
+def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=5):
     """
-    Apply embroidery effect to design image.
+    Apply realistic embroidery effect to design image.
     
-    Simplified approach:
-    1. Generate visible stitch lines
-    2. Add subtle shadow/highlight along stitches (for depth)
-    3. Add thread shine on raised areas
-    4. NO warping of the design itself
+    Upgraded approach:
+    1. Generate thicker stitch lines (2-3px wide)
+    2. Add per-thread surface texture (fiber details)
+    3. Create strong depth with shadows around raised threads
+    4. Add directional highlights for thread shine
     
     Args:
         design_bgra: Design with alpha channel (BGRA)
@@ -233,54 +233,78 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=6):
     
     print(f"  Embroidery: Auto-detected stitch angle = {stitch_angle}° (design {w}x{h})")
     
-    # 1. Generate stitch pattern
+    # 1. Generate stitch pattern with THICKER lines (3px width)
     stitch_pattern = generate_simple_stitch_pattern(alpha, angle=stitch_angle, spacing=stitch_spacing)
     
-    print(f"  Embroidery: Generated {np.count_nonzero(stitch_pattern)} stitch pixels")
+    # Thicken stitches to 3px width
+    kernel_line = np.ones((3, 1), np.uint8) if stitch_angle == 0 else \
+                  np.ones((1, 3), np.uint8) if stitch_angle == 90 else \
+                  np.ones((3, 3), np.uint8)
+    stitch_pattern = cv2.dilate(stitch_pattern, kernel_line, iterations=1)
     
-    # 2. Create subtle depth effect along stitches
-    # Dilate stitches slightly to create "raised thread" area
-    kernel = np.ones((3, 3), np.uint8)
-    stitch_dilated = cv2.dilate(stitch_pattern, kernel, iterations=1)
+    print(f"  Embroidery: Thickened stitches, {np.count_nonzero(stitch_pattern)} total pixels")
     
-    # Create shadow mask (area just outside stitches)
-    stitch_shadow = cv2.dilate(stitch_dilated, kernel, iterations=1)
-    stitch_shadow = cv2.subtract(stitch_shadow, stitch_dilated)
+    # 2. Add surface texture to threads
+    # Create fine noise pattern for thread fiber texture
+    noise = np.random.randint(-15, 15, (h, w), dtype=np.int16)
+    noise = cv2.GaussianBlur(noise.astype(np.float32), (3, 3), 0).astype(np.int16)
     
-    # 3. Apply depth: darken shadows, brighten highlights
+    # Apply texture only to stitch areas
+    stitch_mask = (stitch_pattern > 0).astype(np.float32)
+    thread_texture = noise * stitch_mask
+    
+    # 3. Create STRONG depth effect with shadows
+    kernel = np.ones((5, 5), np.uint8)
+    
+    # Create shadow area around stitches
+    stitch_shadow = cv2.dilate(stitch_pattern, kernel, iterations=2)
+    stitch_shadow = cv2.subtract(stitch_shadow, stitch_pattern)
+    
+    # Distance transform for gradient shadow
+    stitch_shadow_float = stitch_shadow.astype(np.float32) / 255.0
+    shadow_blur = cv2.GaussianBlur(stitch_shadow_float, (7, 7), 0)
+    
+    # 4. Build depth map
     depth_map = np.zeros((h, w), dtype=np.float32)
     
-    # Highlights on stitches (brighten by 15%)
-    depth_map[stitch_dilated > 0] = 0.15
+    # Strong shadows (darken by 25%)
+    depth_map[shadow_blur > 0] = -0.25 * shadow_blur[shadow_blur > 0]
     
-    # Shadows next to stitches (darken by 10%)
-    depth_map[stitch_shadow > 0] = -0.10
+    # Raised highlights on stitches (brighten by 30%)
+    depth_map[stitch_pattern > 0] = 0.30
     
     # Apply depth to design
     embroidered_bgr = design_bgr.copy().astype(np.float32)
     for c in range(3):
         embroidered_bgr[:, :, c] = embroidered_bgr[:, :, c] * (1.0 + depth_map)
+        # Add thread surface texture
+        embroidered_bgr[:, :, c] = embroidered_bgr[:, :, c] + thread_texture
     
     embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
     
-    # 4. Add thread shine (specular highlights on raised stitches)
-    # Only on the actual stitch lines, not dilated area
-    shine_mask = stitch_pattern.astype(np.float32) / 255.0
-    shine_intensity = 30  # Add brightness
+    # 5. Add directional thread shine (anisotropic highlight)
+    # Simulate light reflection along thread direction
+    shine_kernel = np.ones((1, 7), np.uint8) if stitch_angle == 0 else \
+                   np.ones((7, 1), np.uint8) if stitch_angle == 90 else \
+                   np.ones((5, 5), np.uint8)
+    
+    shine_mask = cv2.erode(stitch_pattern, shine_kernel, iterations=1)
+    shine_intensity = 50  # Strong highlight
     
     for c in range(3):
         embroidered_bgr[:, :, c] = np.clip(
-            embroidered_bgr[:, :, c].astype(np.int16) + (shine_mask * shine_intensity).astype(np.int16),
+            embroidered_bgr[:, :, c].astype(np.int16) + 
+            ((shine_mask.astype(np.float32) / 255.0) * shine_intensity).astype(np.int16),
             0, 255
         ).astype(np.uint8)
     
-    # 5. Combine with original alpha channel
+    # 6. Combine with original alpha channel
     embroidered = cv2.merge([embroidered_bgr[:, :, 0], 
                              embroidered_bgr[:, :, 1], 
                              embroidered_bgr[:, :, 2], 
                              alpha])
     
-    print(f"  Embroidery: Effect applied, output shape={embroidered.shape}")
+    print(f"  Embroidery: Realistic effect applied, output shape={embroidered.shape}")
     
     return embroidered
 
@@ -569,7 +593,7 @@ async def generate_mockup(request: MockupRequest):
             design_canvas = apply_embroidery_effect(
                 design_canvas,
                 stitch_angle=45,  # Will be auto-detected inside function
-                stitch_spacing=6  # Updated to match function default
+                stitch_spacing=5  # Updated to match realistic spacing
             )
             print("✓ Embroidery effect applied")
             print(f"   Design canvas after embroidery: {design_canvas.shape}")
