@@ -64,6 +64,9 @@ class MockupRequest(BaseModel):
     baseScale: float
     position: Position
     scale: float
+    rotation: float = 0.0           # degrees, -180 to 180
+    designNaturalWidth: int = 0     # design natural px width
+    designNaturalHeight: int = 0    # design natural px height
     displacementStrength: int = 10
 
 
@@ -292,10 +295,17 @@ async def generate_mockup(request: MockupRequest):
         disp_map = create_displacement_map(tshirt_bgr)
         print("✓ Displacement map created")
 
-        # --- 3. Calculate design placement dimensions ---
-        design_width  = int(tshirt_bgr.shape[1] * request.scale * 0.3)
-        design_height = int(tshirt_bgr.shape[0] * request.scale * 0.3)
-        print(f"✓ Design size:     {design_width}x{design_height} at ({request.position.x},{request.position.y})")
+        # --- 3. Calculate design size in base image pixels ---
+        # scaleInBase = design natural pixels * scale → base image pixels
+        # e.g. design is 500px wide, scaleInBase=0.5 → 250px wide on base image
+        if request.designNaturalWidth > 0 and request.designNaturalHeight > 0:
+            design_width  = int(request.designNaturalWidth  * request.scale)
+            design_height = int(request.designNaturalHeight * request.scale)
+        else:
+            # Fallback if frontend did not send natural dimensions
+            design_width  = int(tshirt_bgr.shape[1] * request.scale * 0.3)
+            design_height = int(tshirt_bgr.shape[0] * request.scale * 0.3)
+        print(f"✓ Design size:     {design_width}x{design_height} at ({request.position.x},{request.position.y}) rot={request.rotation}°")
 
         # --- 4. Place design on full-size canvas (BGRA) ---
         print("→ Placing design on canvas...")
@@ -308,6 +318,20 @@ async def generate_mockup(request: MockupRequest):
             design_height
         )
         print("✓ Design placed")
+
+        # --- 4b. Apply rotation around design center ---
+        if request.rotation != 0.0:
+            print(f"→ Rotating design {request.rotation}°...")
+            th, tw = tshirt_bgr.shape[:2]
+            cx, cy = request.position.x, request.position.y
+            M = cv2.getRotationMatrix2D((cx, cy), -request.rotation, 1.0)
+            design_canvas = cv2.warpAffine(
+                design_canvas, M, (tw, th),
+                flags=cv2.INTER_CUBIC,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(0, 0, 0, 0)
+            )
+            print("✓ Rotation applied")
 
         # --- 5. Warp design with displacement map ---
         print("→ Warping design with displacement map...")
