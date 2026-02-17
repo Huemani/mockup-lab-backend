@@ -71,6 +71,7 @@ class MockupRequest(BaseModel):
     designNaturalHeight: int = 0    # design natural px height
     displacementStrength: int = 10
     shadowStrength: float = 0.5      # 0.0 to 1.0, shadow/highlight blend strength
+    opacity: float = 1.0              # 0.0 to 1.0, design opacity
 
 
 def download_image_from_url(url: str, keep_alpha: bool = False):
@@ -167,7 +168,10 @@ def place_and_resize_design(tshirt_shape, design_bgra, pos_x, pos_y, design_widt
     new_w = int(dw * scale)
     new_h = int(dh * scale)
 
-    resized = cv2.resize(design_bgra, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+    # Use INTER_AREA for downscaling (avoids aliasing/pixelation),
+    # INTER_CUBIC for upscaling (better quality than bilinear)
+    interp = cv2.INTER_AREA if (new_w < dw or new_h < dh) else cv2.INTER_CUBIC
+    resized = cv2.resize(design_bgra, (new_w, new_h), interpolation=interp)
 
     # pos_x/pos_y is the CENTER of the design in base image pixels
     x_off = pos_x - new_w // 2
@@ -187,7 +191,7 @@ def place_and_resize_design(tshirt_shape, design_bgra, pos_x, pos_y, design_widt
     return canvas
 
 
-def alpha_composite_design(tshirt_bgr, warped_design_bgra, tshirt_bgr_original, shadow_strength=0.5):
+def alpha_composite_design(tshirt_bgr, warped_design_bgra, tshirt_bgr_original, shadow_strength=0.5, opacity=1.0):
     """
     Composite the warped design onto the t-shirt with realistic shadow/highlight integration.
 
@@ -205,6 +209,7 @@ def alpha_composite_design(tshirt_bgr, warped_design_bgra, tshirt_bgr_original, 
     b, g, r, a = cv2.split(warped_design_bgra)
     design_bgr = cv2.merge([b, g, r])
     alpha_mask = a.astype(np.float32) / 255.0
+    alpha_mask = alpha_mask * opacity  # apply opacity to alpha
     alpha_3ch = alpha_mask[:, :, np.newaxis]
 
     # Step 1: Clean alpha composite in RGB
@@ -389,7 +394,7 @@ async def generate_mockup(request: MockupRequest):
 
         # --- 6. Composite warped design onto t-shirt ---
         print("→ Compositing design onto t-shirt...")
-        result = alpha_composite_design(tshirt_bgr, warped_design, tshirt_bgr, request.shadowStrength)
+        result = alpha_composite_design(tshirt_bgr, warped_design, tshirt_bgr, request.shadowStrength, request.opacity)
         print("✓ Composite complete")
 
         # --- 7. Upload to Cloudinary ---
