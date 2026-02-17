@@ -72,6 +72,7 @@ class MockupRequest(BaseModel):
     displacementStrength: int = 10
     shadowStrength: float = 0.5      # 0.0 to 1.0, shadow/highlight blend strength
     opacity: float = 1.0              # 0.0 to 1.0, design opacity
+    method: str = "dtg"               # "dtg" or "embroidery"
 
 
 def download_image_from_url(url: str, keep_alpha: bool = False):
@@ -107,6 +108,197 @@ def create_displacement_map(tshirt_bgr):
     disp_map = np.clip(disp_map - mean_val + 128, 0, 255).astype(np.uint8)
 
     return disp_map
+
+
+def generate_simple_stitch_pattern(design_alpha, angle=45, spacing=3):
+    """
+    Generate simplified embroidery stitch pattern.
+    Creates parallel lines across design area at specified angle.
+    
+    Args:
+        design_alpha: grayscale alpha channel (0-255)
+        angle: stitch direction in degrees (0=horizontal, 45=diagonal, 90=vertical)
+        spacing: pixels between stitch lines
+    
+    Returns:
+        Grayscale image with white stitch lines on black background
+    """
+    h, w = design_alpha.shape
+    stitch_pattern = np.zeros((h, w), dtype=np.uint8)
+    
+    # Convert angle to radians
+    angle_rad = np.deg2rad(angle)
+    
+    # Calculate direction vector
+    dx = np.cos(angle_rad)
+    dy = np.sin(angle_rad)
+    
+    # Determine how many lines we need to cover the entire canvas
+    # Use diagonal length as safe upper bound
+    diagonal = int(np.sqrt(h**2 + w**2))
+    num_lines = diagonal // spacing + 1
+    
+    print(f"   Stitch generation: {w}x{h} canvas, angle={angle}°, spacing={spacing}px, drawing {num_lines*2} lines")
+    
+    # Draw parallel lines
+    lines_drawn = 0
+    for i in range(-num_lines, num_lines):
+        offset = i * spacing
+        
+        # Calculate line endpoints perpendicular to stitch direction
+        # Start from center and extend in perpendicular direction
+        perp_dx = -dy
+        perp_dy = dx
+        
+        # Line passes through (offset * perp_dx, offset * perp_dy) in direction (dx, dy)
+        # Calculate endpoints that extend beyond canvas
+        t_vals = [-diagonal, diagonal]
+        
+        for t1, t2 in [(t_vals[0], t_vals[1])]:
+            x1 = int(w/2 + offset * perp_dx + t1 * dx)
+            y1 = int(h/2 + offset * perp_dy + t1 * dy)
+            x2 = int(w/2 + offset * perp_dx + t2 * dx)
+            y2 = int(h/2 + offset * perp_dy + t2 * dy)
+            
+            # Draw line
+            cv2.line(stitch_pattern, (x1, y1), (x2, y2), 255, 1)
+            lines_drawn += 1
+    
+    print(f"   Stitch generation: Drew {lines_drawn} lines, pattern max={stitch_pattern.max()}, non-zero pixels before mask={np.count_nonzero(stitch_pattern)}")
+    
+    # Mask with design alpha - only keep stitches inside design
+    stitch_pattern = cv2.bitwise_and(stitch_pattern, design_alpha)
+    
+    print(f"   Stitch generation: After alpha mask, non-zero pixels={np.count_nonzero(stitch_pattern)}, alpha has {np.count_nonzero(design_alpha)} non-zero pixels")
+    
+    return stitch_pattern
+
+
+def generate_thread_texture(size=(256, 256)):
+    """
+    Generate procedural thread texture using Perlin-like noise.
+    Creates vertical striations to simulate thread structure.
+    
+    Returns:
+        Grayscale texture (0-255)
+    """
+    h, w = size
+    texture = np.zeros((h, w), dtype=np.uint8)
+    
+    # Create vertical thread lines with slight variation
+    for x in range(w):
+        # Base intensity varies per column (thread)
+        base = 128 + int(30 * np.sin(x * 0.5))
+        
+        for y in range(h):
+            # Add vertical variation (twist in thread)
+            variation = int(20 * np.sin(y * 0.1 + x * 0.3))
+            intensity = np.clip(base + variation, 0, 255)
+            texture[y, x] = intensity
+    
+    return texture
+
+
+def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=6):
+    """
+    Apply embroidery effect to design image.
+    
+    Pipeline:
+    1. Generate stitch pattern from design alpha
+    2. Create height map from stitches (for 3D effect)
+    3. Generate thread texture
+    4. Composite: design + height displacement + thread texture overlay
+    
+    Args:
+        design_bgra: Design with alpha channel (BGRA)
+        stitch_angle: Stitch direction in degrees
+        stitch_spacing: Pixels between stitch lines
+    
+    Returns:
+        BGRA image with embroidery effect applied
+    """
+    h, w = design_bgra.shape[:2]
+    
+    # Extract alpha channel
+    alpha = design_bgra[:, :, 3]
+    
+    # Smart auto-detect stitch angle from design shape
+    # Use longer dimension to determine stitch direction
+    if w > h * 1.3:  # Wider design → vertical stitches
+        stitch_angle = 90
+    elif h > w * 1.3:  # Taller design → horizontal stitches
+        stitch_angle = 0
+    else:  # Square-ish → diagonal stitches
+        stitch_angle = 45
+    
+    print(f"  Embroidery: Auto-detected stitch angle = {stitch_angle}° (design {w}x{h})")
+    
+    # 1. Generate stitch pattern (increased spacing for visibility)
+    stitch_pattern = generate_simple_stitch_pattern(alpha, angle=stitch_angle, spacing=stitch_spacing)
+    
+    print(f"  Embroidery: Stitch pattern generated, max={stitch_pattern.max()}, mean={stitch_pattern.mean():.1f}")
+    
+    # 2. Create height map from stitches (blur for smooth 3D effect)
+    height_map = cv2.GaussianBlur(stitch_pattern, (11, 11), 0).astype(np.float32)
+    
+    # Normalize height map to 0-1 range for displacement
+    if height_map.max() > 0:
+        height_map = height_map / height_map.max()
+    
+    # 3. Apply stronger height displacement to simulate raised threads
+    displacement_strength = 5.0  # pixels (increased from 2.0)
+    disp_x = np.zeros((h, w), dtype=np.float32)
+    disp_y = np.zeros((h, w), dtype=np.float32)
+    
+    # Calculate gradients of height map for displacement direction
+    grad_x = cv2.Sobel(height_map, cv2.CV_32F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(height_map, cv2.CV_32F, 0, 1, ksize=3)
+    
+    disp_x = grad_x * displacement_strength
+    disp_y = grad_y * displacement_strength
+    
+    # Create remap coordinates
+    x_coords = np.arange(w, dtype=np.float32).reshape(1, -1).repeat(h, axis=0)
+    y_coords = np.arange(h, dtype=np.float32).reshape(-1, 1).repeat(w, axis=1)
+    
+    map_x = x_coords + disp_x
+    map_y = y_coords + disp_y
+    
+    # Apply displacement to design
+    design_displaced = cv2.remap(
+        design_bgra,
+        map_x,
+        map_y,
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REPLICATE
+    )
+    
+    # 4. Generate and apply thread texture (stronger variation)
+    thread_tex = generate_thread_texture((h, w))
+    
+    # Increase thread texture variation (0.6 to 1.4 instead of 0.8 to 1.2)
+    thread_tex_norm = (thread_tex.astype(np.float32) / 255.0) * 0.8 + 0.6
+    
+    # Apply thread texture to color channels (not alpha)
+    embroidered = design_displaced.copy()
+    for c in range(3):  # BGR channels
+        embroidered[:, :, c] = np.clip(
+            design_displaced[:, :, c].astype(np.float32) * thread_tex_norm,
+            0, 255
+        ).astype(np.uint8)
+    
+    # 5. Add stronger specular highlights for thread "shine"
+    specular = (height_map * 80).astype(np.uint8)  # Increased from 40
+    
+    for c in range(3):
+        embroidered[:, :, c] = np.clip(
+            embroidered[:, :, c].astype(np.int16) + specular,
+            0, 255
+        ).astype(np.uint8)
+    
+    print(f"  Embroidery: Effect applied, output shape={embroidered.shape}")
+    
+    return embroidered
 
 
 def warp_design_with_displacement(design_bgra, disp_map, strength):
@@ -293,6 +485,7 @@ async def generate_mockup(request: MockupRequest):
         print(f"  Canvas:           {request.canvasWidth}x{request.canvasHeight}")
         print(f"  Position:         ({request.position.x}, {request.position.y})")
         print(f"  Scale:            {request.scale}")
+        print(f"  Method:           {request.method.upper()}")
         print(f"  Displacement:     {request.displacementStrength}")
         print(f"  Shadow Strength:  {request.shadowStrength}")
         print(f"  Opacity:          {request.opacity}")
@@ -384,6 +577,20 @@ async def generate_mockup(request: MockupRequest):
                 borderValue=(0, 0, 0, 0)
             )
             print(f"✓ Skew applied (x={skew_x:.4f}, y={skew_y:.4f} rad)")
+
+        # --- 4d. Apply embroidery effect if method is embroidery ---
+        if request.method == "embroidery":
+            print("→ Applying embroidery effect...")
+            print(f"   Design canvas before embroidery: {design_canvas.shape}, has alpha: {design_canvas.shape[2] == 4}")
+            design_canvas = apply_embroidery_effect(
+                design_canvas,
+                stitch_angle=45,  # Will be auto-detected inside function
+                stitch_spacing=6  # Updated to match function default
+            )
+            print("✓ Embroidery effect applied")
+            print(f"   Design canvas after embroidery: {design_canvas.shape}")
+        else:
+            print(f"→ Skipping embroidery (method={request.method})")
 
         # --- 5. Warp design with displacement map ---
         print("→ Warping design with displacement map...")
