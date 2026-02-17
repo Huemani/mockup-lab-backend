@@ -158,9 +158,9 @@ def place_and_resize_design(tshirt_shape, design_bgra, pos_x, pos_y, design_widt
 
     resized = cv2.resize(design_bgra, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
 
-    # Center within placement area
-    x_off = pos_x + (design_width - new_w) // 2
-    y_off = pos_y + (design_height - new_h) // 2
+    # pos_x/pos_y is the CENTER of the design in base image pixels
+    x_off = pos_x - new_w // 2
+    y_off = pos_y - new_h // 2
 
     # Clip to canvas bounds
     x_off = max(0, min(x_off, tw - 1))
