@@ -65,6 +65,8 @@ class MockupRequest(BaseModel):
     position: Position
     scale: float
     rotation: float = 0.0           # degrees, -180 to 180
+    perspectiveX: float = 0.0       # degrees, -45 to 45 (skew tilt)
+    perspectiveY: float = 0.0       # degrees, -45 to 45 (skew lean)
     designNaturalWidth: int = 0     # design natural px width
     designNaturalHeight: int = 0    # design natural px height
     displacementStrength: int = 10
@@ -332,6 +334,29 @@ async def generate_mockup(request: MockupRequest):
                 borderValue=(0, 0, 0, 0)
             )
             print("✓ Rotation applied")
+
+        # --- 4c. Apply skew (perspective) around design center ---
+        # Replicates PixiJS: skew = (degrees * π / 180) * 0.1
+        if request.perspectiveX != 0.0 or request.perspectiveY != 0.0:
+            import math
+            skew_x = (request.perspectiveX * math.pi / 180) * 0.1
+            skew_y = (request.perspectiveY * math.pi / 180) * 0.1
+            cx, cy = float(request.position.x), float(request.position.y)
+            th, tw = tshirt_bgr.shape[:2]
+            # Shear matrix around center point
+            # x' = x + skew_x * (y - cy)
+            # y' = skew_y * (x - cx) + y
+            M_skew = np.float32([
+                [1,      skew_x, -skew_x * cy],
+                [skew_y, 1,      -skew_y * cx]
+            ])
+            design_canvas = cv2.warpAffine(
+                design_canvas, M_skew, (tw, th),
+                flags=cv2.INTER_CUBIC,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(0, 0, 0, 0)
+            )
+            print(f"✓ Skew applied (x={skew_x:.4f}, y={skew_y:.4f} rad)")
 
         # --- 5. Warp design with displacement map ---
         print("→ Warping design with displacement map...")
