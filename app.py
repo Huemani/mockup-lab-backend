@@ -91,7 +91,14 @@ def create_displacement_map(tshirt_bgr):
     # Large radius = follows big folds only (more realistic).
     # Adjust based on image resolution — 51 works well for ~1000px images.
     blurred = cv2.GaussianBlur(gray, (51, 51), 0)
-    disp_map = cv2.normalize(blurred, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    disp_map = cv2.normalize(blurred, None, 0, 255, cv2.NORM_MINMAX).astype(np.float32)
+
+    # Re-center around 128 so the average displacement is zero.
+    # Without this, images with non-neutral average brightness cause
+    # the entire design to shift position globally.
+    mean_val = np.mean(disp_map)
+    disp_map = np.clip(disp_map - mean_val + 128, 0, 255).astype(np.uint8)
+
     return disp_map
 
 
