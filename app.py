@@ -135,7 +135,7 @@ def generate_contour_following_stitches(design_alpha, spacing=5):
         return stitch_pattern
     
     # 2. For each contour, fill with stitches that follow the shape
-    for contour in contours:
+    for idx, contour in enumerate(contours):
         # Skip very small contours (noise)
         area = cv2.contourArea(contour)
         if area < 100:
@@ -145,6 +145,9 @@ def generate_contour_following_stitches(design_alpha, spacing=5):
         contour_mask = np.zeros((h, w), dtype=np.uint8)
         cv2.drawContours(contour_mask, [contour], -1, 255, -1)
         
+        # Create temporary canvas for this contour's stitches
+        temp_stitches = np.zeros((h, w), dtype=np.uint8)
+        
         # Get bounding box
         x, y, cw, ch = cv2.boundingRect(contour)
         
@@ -153,11 +156,11 @@ def generate_contour_following_stitches(design_alpha, spacing=5):
         if cw > ch * 1.2:
             # Horizontal stitches
             for i in range(y, y + ch, spacing):
-                cv2.line(stitch_pattern, (x, i), (x + cw, i), 255, 1)
+                cv2.line(temp_stitches, (x, i), (x + cw, i), 255, 1)
         elif ch > cw * 1.2:
             # Vertical stitches
             for i in range(x, x + cw, spacing):
-                cv2.line(stitch_pattern, (i, y), (i, y + ch), 255, 1)
+                cv2.line(temp_stitches, (i, y), (i, y + ch), 255, 1)
         else:
             # Diagonal stitches (45°)
             for offset in range(-max(cw, ch), max(cw, ch), spacing):
@@ -166,10 +169,13 @@ def generate_contour_following_stitches(design_alpha, spacing=5):
                 x2 = x + min(cw, cw - offset)
                 y2 = y + min(ch, ch + offset)
                 if x1 < x2 and y1 < y2:
-                    cv2.line(stitch_pattern, (x1, y1), (x2, y2), 255, 1)
+                    cv2.line(temp_stitches, (x1, y1), (x2, y2), 255, 1)
         
         # Mask stitches to only inside this contour
-        stitch_pattern = cv2.bitwise_and(stitch_pattern, contour_mask)
+        masked_stitches = cv2.bitwise_and(temp_stitches, contour_mask)
+        
+        # ACCUMULATE into main pattern (don't overwrite!)
+        stitch_pattern = cv2.bitwise_or(stitch_pattern, masked_stitches)
     
     print(f"   Contour stitching: Generated {np.count_nonzero(stitch_pattern)} stitch pixels")
     
@@ -267,10 +273,11 @@ def generate_thread_texture(size=(256, 256)):
 
 def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=5):
     """
-    Apply clean embroidery effect with contour-following stitches.
+    Apply realistic embroidery effect with global bevel and contour-following stitches.
     
-    Uses contour detection to create stitches that follow the shapes
-    in the design, rather than uniform parallel lines.
+    Two-layer approach:
+    1. Global emboss - entire design appears raised from fabric
+    2. Stitch texture - individual threads visible on surface
     
     Args:
         design_bgra: Design with alpha channel (BGRA)
@@ -286,43 +293,113 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=5):
     alpha = design_bgra[:, :, 3]
     design_bgr = design_bgra[:, :, :3].copy()
     
-    print(f"  Embroidery: Using contour-following stitches (design {w}x{h})")
+    print(f"  Embroidery: Applying global emboss + contour stitches (design {w}x{h})")
     
-    # 1. Generate contour-following stitch pattern
+    # ==================================================================
+    # LAYER 1: GLOBAL EMBOSS - Make entire design appear RAISED
+    # ==================================================================
+    
+    # 1a. Detect design edges
+    _, binary = cv2.threshold(alpha, 1, 255, cv2.THRESH_BINARY)
+    
+    # Use Sobel to find edge gradients (directional)
+    sobel_x = cv2.Sobel(binary, cv2.CV_32F, 1, 0, ksize=5)
+    sobel_y = cv2.Sobel(binary, cv2.CV_32F, 0, 1, ksize=5)
+    
+    # 1b. Create directional shadow/highlight masks
+    # Light source from TOP-RIGHT (45° angle)
+    # Shadow appears on BOTTOM-LEFT edges
+    # Highlight appears on TOP-RIGHT edges
+    
+    # Shadow: where sobel_x is negative (left edge) OR sobel_y is positive (bottom edge)
+    shadow_mask = np.maximum(-sobel_x, sobel_y)
+    shadow_mask = np.clip(shadow_mask, 0, None)
+    
+    # Highlight: where sobel_x is positive (right edge) OR sobel_y is negative (top edge)
+    highlight_mask = np.maximum(sobel_x, -sobel_y)
+    highlight_mask = np.clip(highlight_mask, 0, None)
+    
+    # 1c. Normalize and blur for smooth gradient falloff
+    if shadow_mask.max() > 0:
+        shadow_mask = shadow_mask / shadow_mask.max()
+    shadow_mask = cv2.GaussianBlur(shadow_mask, (7, 7), 0)
+    
+    if highlight_mask.max() > 0:
+        highlight_mask = highlight_mask / highlight_mask.max()
+    highlight_mask = cv2.GaussianBlur(highlight_mask, (7, 7), 0)
+    
+    # 1d. Apply global bevel to design
+    embroidered_bgr = design_bgr.copy().astype(np.float32)
+    
+    # Strong shadow on bottom-left edges (creates depth)
+    shadow_strength = 60  # Darken by up to 60 units
+    for c in range(3):
+        embroidered_bgr[:, :, c] = embroidered_bgr[:, :, c] - (shadow_mask * shadow_strength)
+    
+    # Strong highlight on top-right edges (creates raised appearance)
+    highlight_strength = 70  # Brighten by up to 70 units
+    for c in range(3):
+        embroidered_bgr[:, :, c] = embroidered_bgr[:, :, c] + (highlight_mask * highlight_strength)
+    
+    embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
+    
+    print(f"  Embroidery: Global bevel applied (shadow={shadow_strength}, highlight={highlight_strength})")
+    
+    # ==================================================================
+    # LAYER 2: STITCH TEXTURE - Individual threads on surface
+    # ==================================================================
+    
+    # 2a. Generate contour-following stitch pattern
     stitch_base = generate_contour_following_stitches(alpha, spacing=stitch_spacing)
     
-    # 2. Thicken stitches slightly (1-2px)
+    # 2b. Thicken stitches to 2px
     kernel_thicken = np.ones((2, 2), np.uint8)
     stitch_thick = cv2.dilate(stitch_base, kernel_thicken, iterations=1)
     
-    # 3. Create edge definition
+    # 2c. Create subtle shadow AROUND each stitch thread
+    kernel_shadow = np.ones((4, 4), np.uint8)
+    stitch_shadow_outer = cv2.dilate(stitch_thick, kernel_shadow, iterations=1)
+    stitch_shadow = cv2.subtract(stitch_shadow_outer, stitch_thick)
+    stitch_shadow_blur = cv2.GaussianBlur(stitch_shadow.astype(np.float32), (3, 3), 0)
+    
+    # 2d. Create edge definition on stitches
     kernel_edge = np.ones((3, 3), np.uint8)
     stitch_outer = cv2.dilate(stitch_thick, kernel_edge, iterations=1)
     stitch_edges = cv2.subtract(stitch_outer, stitch_thick)
     
-    # 4. Create center highlight
+    # 2e. Create center highlight on threads
     stitch_center = cv2.erode(stitch_thick, kernel_thicken, iterations=1)
     
-    # 5. Apply effect - preserve colors
-    embroidered_bgr = design_bgr.copy().astype(np.int16)
+    # 2f. Apply stitch detail on top of global emboss
+    embroidered_bgr = embroidered_bgr.astype(np.int16)
     
-    # Subtle dark edges
+    # Subtle shadow around each thread
+    shadow_mask_stitch = (stitch_shadow_blur > 0)
+    shadow_amount = (stitch_shadow_blur[shadow_mask_stitch] / 255.0 * 20).astype(np.int16)
+    embroidered_bgr[shadow_mask_stitch] = np.clip(embroidered_bgr[shadow_mask_stitch] - shadow_amount[:, np.newaxis], 0, 255)
+    
+    # Dark edges on threads
     edge_mask = (stitch_edges > 0)
-    embroidered_bgr[edge_mask] = np.clip(embroidered_bgr[edge_mask] - 15, 0, 255)
+    embroidered_bgr[edge_mask] = np.clip(embroidered_bgr[edge_mask] - 20, 0, 255)
     
-    # Subtle center shine
+    # Bright center shine on threads
     center_mask = (stitch_center > 0)
-    embroidered_bgr[center_mask] = np.clip(embroidered_bgr[center_mask] + 35, 0, 255)
+    embroidered_bgr[center_mask] = np.clip(embroidered_bgr[center_mask] + 45, 0, 255)
     
     embroidered_bgr = embroidered_bgr.astype(np.uint8)
     
-    # 6. Combine with alpha
+    print(f"  Embroidery: Stitch texture applied on top")
+    
+    # ==================================================================
+    # FINAL: Combine with alpha
+    # ==================================================================
+    
     embroidered = cv2.merge([embroidered_bgr[:, :, 0], 
                              embroidered_bgr[:, :, 1], 
                              embroidered_bgr[:, :, 2], 
                              alpha])
     
-    print(f"  Embroidery: Contour-following effect applied")
+    print(f"  Embroidery: Complete - global emboss + stitch detail")
     
     return embroidered
 
