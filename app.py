@@ -66,281 +66,280 @@ class MockupRequest(BaseModel):
     scale: float
     displacementStrength: int = 10
 
-def download_image_from_url(url: str):
+
+def download_image_from_url(url: str, keep_alpha: bool = False):
     """Download image from URL and convert to OpenCV format"""
     response = requests.get(url, timeout=30)
     response.raise_for_status()
-    
     nparr = np.frombuffer(response.content, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    # Use IMREAD_UNCHANGED to preserve alpha channel when needed
+    flag = cv2.IMREAD_UNCHANGED if keep_alpha else cv2.IMREAD_COLOR
+    img = cv2.imdecode(nparr, flag)
     return img
 
-def estimate_depth_simple(image):
-    """Simple depth estimation from shading"""
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    depth = 255 - gray
-    depth = cv2.GaussianBlur(depth, (21, 21), 0)
-    depth = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX)
-    return depth
 
-def create_displacement_from_best_channel(image):
-    """Create displacement map by selecting channel with most contrast"""
-    b, g, r = cv2.split(image)
-    channels = [b, g, r]
-    std_devs = [np.std(ch) for ch in channels]
-    best_channel = channels[np.argmax(std_devs)]
-    
-    if len(best_channel.shape) == 3:
-        gray = cv2.cvtColor(best_channel, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = best_channel
-    
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    enhanced = clahe.apply(gray)
-    blurred = cv2.GaussianBlur(enhanced, (21, 21), 0)
-    
-    return blurred
+def create_displacement_map(tshirt_bgr):
+    """
+    Create a smooth displacement map from the t-shirt image.
+    Replicates Photoshop approach:
+    1. Convert to grayscale
+    2. Apply strong Gaussian Blur to keep large folds, ignore fine texture
+    3. Normalize to 0-255
+    """
+    gray = cv2.cvtColor(tshirt_bgr, cv2.COLOR_BGR2GRAY)
+    # Blur radius controls how large the displacement features are.
+    # Large radius = follows big folds only (more realistic).
+    # Adjust based on image resolution — 51 works well for ~1000px images.
+    blurred = cv2.GaussianBlur(gray, (51, 51), 0)
+    disp_map = cv2.normalize(blurred, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    return disp_map
 
-def compute_normals_from_depth(depth_map):
-    """Compute surface normals from depth map"""
-    grad_x = cv2.Sobel(depth_map.astype(np.float32), cv2.CV_64F, 1, 0, ksize=5)
-    grad_y = cv2.Sobel(depth_map.astype(np.float32), cv2.CV_64F, 0, 1, ksize=5)
-    
-    normal_x = -grad_x
-    normal_y = -grad_y
-    normal_z = np.ones_like(grad_x)
-    
-    magnitude = np.sqrt(normal_x**2 + normal_y**2 + normal_z**2)
-    normal_x /= magnitude
-    normal_y /= magnitude
-    normal_z /= magnitude
-    
-    normals = np.stack([normal_x, normal_y, normal_z], axis=-1)
-    return normals
 
-def create_physical_displacement_field(depth_map, normal_map, disp_map, strength=10):
-    """Create physically-aware displacement field"""
-    h, w = depth_map.shape
-    
-    depth_norm = (depth_map.astype(float) - depth_map.min()) / (depth_map.max() - depth_map.min() + 1e-6)
-    
-    grad_x = cv2.Sobel(depth_norm, cv2.CV_64F, 1, 0, ksize=5)
-    grad_y = cv2.Sobel(depth_norm, cv2.CV_64F, 0, 1, ksize=5)
-    
-    disp_x = grad_x * strength
-    disp_y = grad_y * strength
-    
-    disp_norm = (disp_map.astype(float) / 255.0 - 0.5) * 2
-    disp_x += disp_norm * (strength * 0.3)
-    disp_y += disp_norm * (strength * 0.3)
-    
-    disp_x = cv2.GaussianBlur(disp_x, (15, 15), 0)
-    disp_y = cv2.GaussianBlur(disp_y, (15, 15), 0)
-    
-    return disp_x.astype(np.float32), disp_y.astype(np.float32)
+def warp_design_with_displacement(design_bgra, disp_map, strength):
+    """
+    Warp the design image using the displacement map.
+    Replicates Photoshop's Displace filter:
+    - White pixels (255) shift design pixels in +x/+y direction
+    - Black pixels (0) shift in -x/-y direction
+    - Mid-gray (128) = no shift
+    Strength corresponds to Photoshop's horizontal/vertical scale (default 10).
+    """
+    h, w = design_bgra.shape[:2]
 
-def apply_dense_warp(image, disp_x, disp_y):
-    """Apply dense displacement field to warp image"""
-    h, w = image.shape[:2]
-    
-    x_coords = np.arange(w).reshape(1, -1).repeat(h, axis=0).astype(np.float32)
-    y_coords = np.arange(h).reshape(-1, 1).repeat(w, axis=1).astype(np.float32)
-    
-    map_x = x_coords + disp_x
-    map_y = y_coords + disp_y
-    
+    # Resize displacement map to match design dimensions
+    disp_resized = cv2.resize(disp_map, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    # Convert grayscale values to pixel offsets
+    # 128 = neutral (no shift), 0 = max negative, 255 = max positive
+    disp_normalized = (disp_resized.astype(np.float32) - 128.0) / 128.0  # range: -1 to +1
+    disp_pixels = disp_normalized * strength  # scale by strength in pixels
+
+    # Build remap coordinates
+    x_coords = np.arange(w, dtype=np.float32).reshape(1, -1).repeat(h, axis=0)
+    y_coords = np.arange(h, dtype=np.float32).reshape(-1, 1).repeat(w, axis=1)
+
+    map_x = x_coords + disp_pixels
+    map_y = y_coords + disp_pixels
+
+    # Apply warp to all 4 channels (BGRA) — critical to warp alpha too
     warped = cv2.remap(
-        image, 
-        map_x, 
-        map_y, 
+        design_bgra,
+        map_x,
+        map_y,
         interpolation=cv2.INTER_CUBIC,
-        borderMode=cv2.BORDER_REFLECT
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(0, 0, 0, 0)  # transparent border
     )
-    
+
     return warped
 
-def intelligent_blend(tshirt, design, normal_map, depth_map, design_opacity=0.85):
-    """Intelligent blending of design with t-shirt"""
-    if tshirt.shape[:2] != design.shape[:2]:
-        design = cv2.resize(design, (tshirt.shape[1], tshirt.shape[0]))
-    
-    tshirt_float = tshirt.astype(float) / 255.0
-    design_float = design.astype(float) / 255.0
-    blended = tshirt_float * design_float
-    
-    if normal_map is not None:
-        facing_factor = (normal_map[:,:,2] + 1) / 2
-        facing_factor = np.clip(facing_factor, 0.3, 1.0)
-        facing_factor = facing_factor[:,:,np.newaxis]
-        adaptive_opacity = design_opacity * facing_factor
-    else:
-        adaptive_opacity = design_opacity
-    
-    result = blended * adaptive_opacity + tshirt_float * (1 - adaptive_opacity)
-    
-    tshirt_gray = cv2.cvtColor(tshirt, cv2.COLOR_BGR2GRAY)
-    shadow_threshold = np.percentile(tshirt_gray, 15)
-    shadow_mask = tshirt_gray < shadow_threshold
-    shadow_mask = shadow_mask[:,:,np.newaxis]
-    
-    result = np.where(shadow_mask, 
-                     result * 0.6 + tshirt_float * 0.4,
-                     result)
-    
-    result = (result * 255).astype(np.uint8)
+
+def place_and_resize_design(tshirt_shape, design_bgra, pos_x, pos_y, design_width, design_height):
+    """
+    Resize design to target dimensions and place it on a transparent canvas
+    the same size as the t-shirt image.
+    Returns BGRA canvas.
+    """
+    th, tw = tshirt_shape[:2]
+    canvas = np.zeros((th, tw, 4), dtype=np.uint8)
+
+    dh, dw = design_bgra.shape[:2]
+    # Maintain aspect ratio
+    scale = min(design_width / dw, design_height / dh)
+    new_w = int(dw * scale)
+    new_h = int(dh * scale)
+
+    resized = cv2.resize(design_bgra, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+
+    # Center within placement area
+    x_off = pos_x + (design_width - new_w) // 2
+    y_off = pos_y + (design_height - new_h) // 2
+
+    # Clip to canvas bounds
+    x_off = max(0, min(x_off, tw - 1))
+    y_off = max(0, min(y_off, th - 1))
+    x_end = min(x_off + new_w, tw)
+    y_end = min(y_off + new_h, th)
+
+    # Clip design if it extends beyond canvas
+    design_x_end = new_w - max(0, (x_off + new_w) - tw)
+    design_y_end = new_h - max(0, (y_off + new_h) - th)
+
+    canvas[y_off:y_end, x_off:x_end] = resized[0:design_y_end, 0:design_x_end]
+    return canvas
+
+
+def alpha_composite_design(tshirt_bgr, warped_design_bgra, tshirt_bgr_original):
+    """
+    Composite the warped design onto the t-shirt using proper alpha blending.
+    Then apply a Multiply pass with the t-shirt texture to add realistic
+    shadow/highlight integration (replicates Photoshop's clipping mask + Multiply).
+
+    Steps:
+    1. Alpha-composite warped design over t-shirt
+    2. Blend Multiply result back at low opacity for fabric shadow effect
+    """
+    h, w = tshirt_bgr.shape[:2]
+
+    # Split warped design into BGR + alpha
+    b, g, r, a = cv2.split(warped_design_bgra)
+    design_bgr = cv2.merge([b, g, r])
+    alpha_mask = a.astype(np.float32) / 255.0  # 0.0 to 1.0
+
+    tshirt_float = tshirt_bgr.astype(np.float32) / 255.0
+    design_float = design_bgr.astype(np.float32) / 255.0
+
+    alpha_3ch = alpha_mask[:, :, np.newaxis]
+
+    # Step 1: Standard alpha composite
+    composited = design_float * alpha_3ch + tshirt_float * (1.0 - alpha_3ch)
+
+    # Step 2: Multiply blend — design × t-shirt — to pick up shadows/highlights
+    multiply = design_float * tshirt_float
+
+    # Blend multiply result back where design exists (at ~40% strength)
+    # This makes the design follow the fabric's light and dark areas
+    multiply_strength = 0.4
+    result = composited * (1.0 - multiply_strength * alpha_3ch) + multiply * (multiply_strength * alpha_3ch)
+
+    result = np.clip(result * 255, 0, 255).astype(np.uint8)
     return result
 
-def resize_design_to_region(design, region_width, region_height):
-    """Resize design to fit within region while maintaining aspect ratio"""
-    design_h, design_w = design.shape[:2]
-    
-    scale_w = region_width / design_w
-    scale_h = region_height / design_h
-    scale = min(scale_w, scale_h)
-    
-    new_w = int(design_w * scale)
-    new_h = int(design_h * scale)
-    
-    resized = cv2.resize(design, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
-    return resized
-
-def place_design_on_tshirt(tshirt, design, x, y, width, height):
-    """Place design on specific region of t-shirt"""
-    design_resized = resize_design_to_region(design, width, height)
-    canvas = np.zeros_like(tshirt)
-    
-    dh, dw = design_resized.shape[:2]
-    
-    x_offset = x + (width - dw) // 2
-    y_offset = y + (height - dh) // 2
-    
-    x_offset = max(0, min(x_offset, tshirt.shape[1] - dw))
-    y_offset = max(0, min(y_offset, tshirt.shape[0] - dh))
-    
-    canvas[y_offset:y_offset+dh, x_offset:x_offset+dw] = design_resized
-    return canvas
 
 @app.get("/")
 async def root():
     return {
-        "message": "Mockup Lab API", 
+        "message": "Mockup Lab API",
         "status": "running",
-        "version": "2.0.0",
+        "version": "3.0.0",
         "endpoints": ["/health", "/generate-mockup", "/docs"],
         "accepts": "JSON with Cloudinary URLs (frontend contract)"
     }
 
+
 @app.get("/health")
 async def health_check():
     cloudinary_configured = bool(
-        CLOUDINARY_CLOUD_NAME and 
-        CLOUDINARY_API_KEY and 
+        CLOUDINARY_CLOUD_NAME and
+        CLOUDINARY_API_KEY and
         CLOUDINARY_API_SECRET
     )
     return {
-        "status": "healthy", 
+        "status": "healthy",
         "cloudinary": cloudinary_configured,
         "cloud_name": CLOUDINARY_CLOUD_NAME or "not set",
         "api_key_set": bool(CLOUDINARY_API_KEY),
         "api_secret_set": bool(CLOUDINARY_API_SECRET)
     }
 
+
 @app.post("/generate-mockup")
 async def generate_mockup(request: MockupRequest):
     """
-    Generate t-shirt mockup with optimal displacement mapping
-    Accepts JSON matching frontend contract
+    Generate t-shirt mockup with Photoshop-equivalent displacement mapping.
+
+    Pipeline:
+    1. Download t-shirt (BGR) and design (BGRA with alpha)
+    2. Create displacement map: grayscale t-shirt → strong Gaussian Blur
+    3. Place design on canvas at correct position/scale
+    4. Warp design using displacement map (Photoshop Displace filter equivalent)
+    5. Alpha-composite warped design onto t-shirt
+    6. Apply Multiply blend at low opacity for shadow integration
+    7. Upload result to Cloudinary
     """
     try:
         print(f"\n{'='*60}")
-        print("MOCKUP GENERATION REQUEST")
+        print("MOCKUP GENERATION REQUEST v3.0")
         print(f"{'='*60}")
-        print(f"  Base Image URL: {request.baseImageUrl}")
+        print(f"  Base Image URL:   {request.baseImageUrl}")
         print(f"  Design Image URL: {request.designImageUrl}")
-        print(f"  Canvas: {request.canvasWidth}x{request.canvasHeight}")
-        print(f"  Position: ({request.position.x}, {request.position.y})")
-        print(f"  Scale: {request.scale}")
-        print(f"  Displacement Strength: {request.displacementStrength}")
-        
-        # Download images from URLs
-        print("→ Downloading base image (t-shirt)...")
-        tshirt_img = download_image_from_url(request.baseImageUrl)
-        
-        print("→ Downloading design image...")
-        design_img = download_image_from_url(request.designImageUrl)
-        
-        if tshirt_img is None or design_img is None:
+        print(f"  Canvas:           {request.canvasWidth}x{request.canvasHeight}")
+        print(f"  Position:         ({request.position.x}, {request.position.y})")
+        print(f"  Scale:            {request.scale}")
+        print(f"  Displacement:     {request.displacementStrength}")
+
+        # --- 1. Download images ---
+        print("\n→ Downloading t-shirt image...")
+        tshirt_bgr = download_image_from_url(request.baseImageUrl, keep_alpha=False)
+
+        print("→ Downloading design image (with alpha)...")
+        design_bgra = download_image_from_url(request.designImageUrl, keep_alpha=True)
+
+        if tshirt_bgr is None or design_bgra is None:
             raise HTTPException(status_code=400, detail="Failed to download images from URLs")
-        
-        print(f"✓ Images loaded: tshirt {tshirt_img.shape}, design {design_img.shape}")
-        
-        # Calculate design dimensions based on scale
-        design_width = int(tshirt_img.shape[1] * request.scale * 0.3)  # 30% of width at scale 1
-        design_height = int(tshirt_img.shape[0] * request.scale * 0.3)
-        
-        print(f"✓ Design placement: ({request.position.x}, {request.position.y}) size: {design_width}x{design_height}")
-        
-        # Place design
-        design_placed = place_design_on_tshirt(
-            tshirt_img, design_img, 
-            request.position.x, request.position.y, 
-            design_width, design_height
-        )
-        print("✓ Design placed on canvas")
-        
-        # Depth estimation
-        depth = estimate_depth_simple(tshirt_img)
-        print("✓ Depth estimated")
-        
-        # Compute normals
-        normals = compute_normals_from_depth(depth)
-        print("✓ Normals computed")
-        
-        # Displacement map
-        disp_map = create_displacement_from_best_channel(tshirt_img)
+
+        # Ensure design has alpha channel
+        if design_bgra.ndim == 2:
+            # Grayscale → BGRA
+            design_bgra = cv2.cvtColor(design_bgra, cv2.COLOR_GRAY2BGR)
+            design_bgra = cv2.cvtColor(design_bgra, cv2.COLOR_BGR2BGRA)
+        elif design_bgra.shape[2] == 3:
+            # BGR → BGRA (no transparency → fully opaque)
+            design_bgra = cv2.cvtColor(design_bgra, cv2.COLOR_BGR2BGRA)
+
+        print(f"✓ T-shirt loaded:  {tshirt_bgr.shape}")
+        print(f"✓ Design loaded:   {design_bgra.shape} (channels: {design_bgra.shape[2]})")
+
+        # --- 2. Create displacement map from t-shirt ---
+        print("→ Creating displacement map...")
+        disp_map = create_displacement_map(tshirt_bgr)
         print("✓ Displacement map created")
-        
-        # Physical displacement field
-        disp_x, disp_y = create_physical_displacement_field(
-            depth, normals, disp_map, request.displacementStrength
+
+        # --- 3. Calculate design placement dimensions ---
+        design_width  = int(tshirt_bgr.shape[1] * request.scale * 0.3)
+        design_height = int(tshirt_bgr.shape[0] * request.scale * 0.3)
+        print(f"✓ Design size:     {design_width}x{design_height} at ({request.position.x},{request.position.y})")
+
+        # --- 4. Place design on full-size canvas (BGRA) ---
+        print("→ Placing design on canvas...")
+        design_canvas = place_and_resize_design(
+            tshirt_bgr.shape,
+            design_bgra,
+            request.position.x,
+            request.position.y,
+            design_width,
+            design_height
         )
-        print("✓ Displacement field generated")
-        
-        # Warp design
-        warped_design = apply_dense_warp(design_placed, disp_x, disp_y)
+        print("✓ Design placed")
+
+        # --- 5. Warp design with displacement map ---
+        print("→ Warping design with displacement map...")
+        warped_design = warp_design_with_displacement(
+            design_canvas,
+            disp_map,
+            request.displacementStrength
+        )
         print("✓ Design warped")
-        
-        # Intelligent blend
-        result = intelligent_blend(tshirt_img, warped_design, normals, depth)
-        print("✓ Blending complete")
-        
-        # Convert to PIL Image
+
+        # --- 6. Composite warped design onto t-shirt ---
+        print("→ Compositing design onto t-shirt...")
+        result = alpha_composite_design(tshirt_bgr, warped_design, tshirt_bgr)
+        print("✓ Composite complete")
+
+        # --- 7. Upload to Cloudinary ---
         result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
         result_pil = Image.fromarray(result_rgb)
-        
-        # Save to BytesIO
+
         buffer = BytesIO()
         result_pil.save(buffer, format="PNG")
         buffer.seek(0)
-        
-        # Upload to Cloudinary
+
         print("→ Uploading to Cloudinary...")
-        
+
         if not (CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET):
             raise HTTPException(status_code=500, detail="Cloudinary not configured")
-        
+
         upload_result = cloudinary.uploader.upload(
             buffer,
             folder="mockup-lab",
             resource_type="image"
         )
-        
+
         print(f"✓ Upload successful: {upload_result['secure_url']}")
         print(f"{'='*60}\n")
-        
-        # Return URL directly (frontend expects string)
+
         return upload_result['secure_url']
-        
+
     except requests.RequestException as e:
         print(f"\n✗ ERROR downloading images: {str(e)}\n")
         raise HTTPException(status_code=400, detail=f"Failed to download images: {str(e)}")
@@ -349,6 +348,7 @@ async def generate_mockup(request: MockupRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     import uvicorn
