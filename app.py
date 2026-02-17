@@ -127,6 +127,11 @@ def warp_design_with_displacement(design_bgra, disp_map, strength):
     disp_normalized = (disp_resized.astype(np.float32) - 128.0) / 128.0  # range: -1 to +1
     disp_pixels = disp_normalized * strength  # scale by strength in pixels
 
+    # Blur the displacement FIELD (not just the map) to eliminate sharp gradients
+    # that cause stretching artifacts at edges. This guarantees smooth transitions
+    # between neighbouring pixels regardless of base image content.
+    disp_pixels = cv2.GaussianBlur(disp_pixels, (15, 15), 0)
+
     # Build remap coordinates
     x_coords = np.arange(w, dtype=np.float32).reshape(1, -1).repeat(h, axis=0)
     y_coords = np.arange(h, dtype=np.float32).reshape(-1, 1).repeat(w, axis=1)
@@ -187,50 +192,49 @@ def alpha_composite_design(tshirt_bgr, warped_design_bgra, tshirt_bgr_original, 
     Composite the warped design onto the t-shirt with realistic shadow/highlight integration.
 
     Steps:
-    1. Alpha-composite warped design cleanly over t-shirt
-    2. Extract luminance (light/dark info only) from t-shirt — no colour contamination
-    3. Apply luminance as Soft Light blend on top of composited result, only where design exists
-       This replicates Photoshop's clipping mask + Soft Light — shadows darken the design,
-       highlights brighten it, without altering its colours.
+    1. Alpha-composite warped design cleanly over t-shirt (RGB untouched)
+    2. Convert composited result to LAB colour space
+    3. Replace L channel with a blend of design L and t-shirt L
+       — this adjusts brightness only, A and B (colour) channels are physically unchanged
+    4. Convert back to BGR
+
+    LAB is the only truly colour-neutral approach: L = pure lightness, A/B = pure colour.
+    Shadows darken the design, highlights brighten it, zero colour contamination.
     """
     # Split warped design into BGR + alpha
     b, g, r, a = cv2.split(warped_design_bgra)
     design_bgr = cv2.merge([b, g, r])
-    alpha_mask = a.astype(np.float32) / 255.0  # 0.0 to 1.0
+    alpha_mask = a.astype(np.float32) / 255.0
     alpha_3ch = alpha_mask[:, :, np.newaxis]
 
+    # Step 1: Clean alpha composite in RGB
     tshirt_float = tshirt_bgr.astype(np.float32) / 255.0
     design_float = design_bgr.astype(np.float32) / 255.0
-
-    # Step 1: Clean alpha composite — no colour blending yet
     composited = design_float * alpha_3ch + tshirt_float * (1.0 - alpha_3ch)
+    composited_uint8 = np.clip(composited * 255, 0, 255).astype(np.uint8)
 
-    # Step 2: Extract luminance from t-shirt (perceptual weights)
-    # This is pure light/dark information — no hue or saturation
-    luminance = (0.114 * tshirt_float[:,:,0] +
-                 0.587 * tshirt_float[:,:,1] +
-                 0.299 * tshirt_float[:,:,2])
-    luminance_3ch = luminance[:, :, np.newaxis]
+    # Step 2: Convert both composited result and t-shirt to LAB
+    composited_lab = cv2.cvtColor(composited_uint8, cv2.COLOR_BGR2Lab)
+    tshirt_lab = cv2.cvtColor(tshirt_bgr, cv2.COLOR_BGR2Lab)
 
-    # Step 3: Soft Light blend formula (Photoshop-equivalent)
-    # For lum < 0.5: darkens (shadows)
-    # For lum > 0.5: brightens (highlights)
-    # Result stays close to design colour — no fabric colour contamination
-    soft_light = np.where(
-        luminance_3ch <= 0.5,
-        composited - (1.0 - 2.0 * luminance_3ch) * composited * (1.0 - composited),
-        composited + (2.0 * luminance_3ch - 1.0) * (
-            np.where(composited <= 0.25,
-                     ((16.0 * composited - 12.0) * composited + 4.0) * composited,
-                     np.sqrt(composited)) - composited
-        )
-    )
+    # Step 3: Extract L channels (lightness only)
+    comp_L = composited_lab[:, :, 0].astype(np.float32)   # design composited lightness
+    tshirt_L = tshirt_lab[:, :, 0].astype(np.float32)     # fabric lightness (shadows/highlights)
 
-    # Blend soft light result at controlled strength, only where design exists
-    # strength=0.5 means 50% shadow/highlight influence from fabric
-    result = composited * (1.0 - shadow_strength * alpha_3ch) + soft_light * (shadow_strength * alpha_3ch)
+    # Blend: pull design L toward fabric L, weighted by shadow_strength and alpha
+    # At strength=0: pure design lightness (no fabric influence)
+    # At strength=1: full fabric lightness mapped onto design
+    # Fabric L is normalised: 128 = neutral (no shift), <128 = shadow, >128 = highlight
+    fabric_influence = (tshirt_L - 128.0) * shadow_strength  # signed offset: negative=dark, positive=light
+    blended_L = comp_L + fabric_influence * alpha_mask        # only affect where design exists
+    blended_L = np.clip(blended_L, 0, 255).astype(np.uint8)
 
-    result = np.clip(result * 255, 0, 255).astype(np.uint8)
+    # Step 4: Recombine with original A and B channels (colour untouched)
+    result_lab = composited_lab.copy()
+    result_lab[:, :, 0] = blended_L
+
+    # Step 5: Convert back to BGR
+    result = cv2.cvtColor(result_lab, cv2.COLOR_Lab2BGR)
     return result
 
 
