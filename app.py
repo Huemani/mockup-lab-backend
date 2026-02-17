@@ -110,6 +110,72 @@ def create_displacement_map(tshirt_bgr):
     return disp_map
 
 
+def generate_contour_following_stitches(design_alpha, spacing=5):
+    """
+    Generate embroidery stitches that follow the contours of the design.
+    This creates realistic directional stitching rather than uniform parallel lines.
+    
+    Args:
+        design_alpha: Alpha channel of design (0-255)
+        spacing: Spacing between stitch lines
+        
+    Returns:
+        Stitch pattern image
+    """
+    h, w = design_alpha.shape
+    stitch_pattern = np.zeros((h, w), dtype=np.uint8)
+    
+    # 1. Find contours in the design
+    _, binary = cv2.threshold(design_alpha, 1, 255, cv2.THRESH_BINARY)
+    contours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    
+    print(f"   Contour stitching: Found {len(contours)} contours")
+    
+    if len(contours) == 0:
+        return stitch_pattern
+    
+    # 2. For each contour, fill with stitches that follow the shape
+    for contour in contours:
+        # Skip very small contours (noise)
+        area = cv2.contourArea(contour)
+        if area < 100:
+            continue
+        
+        # Create mask for this contour
+        contour_mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(contour_mask, [contour], -1, 255, -1)
+        
+        # Get bounding box
+        x, y, cw, ch = cv2.boundingRect(contour)
+        
+        # Determine dominant direction for stitches
+        # If wider than tall → horizontal stitches, else vertical
+        if cw > ch * 1.2:
+            # Horizontal stitches
+            for i in range(y, y + ch, spacing):
+                cv2.line(stitch_pattern, (x, i), (x + cw, i), 255, 1)
+        elif ch > cw * 1.2:
+            # Vertical stitches
+            for i in range(x, x + cw, spacing):
+                cv2.line(stitch_pattern, (i, y), (i, y + ch), 255, 1)
+        else:
+            # Diagonal stitches (45°)
+            for offset in range(-max(cw, ch), max(cw, ch), spacing):
+                x1 = x + max(0, -offset)
+                y1 = y + max(0, offset)
+                x2 = x + min(cw, cw - offset)
+                y2 = y + min(ch, ch + offset)
+                if x1 < x2 and y1 < y2:
+                    cv2.line(stitch_pattern, (x1, y1), (x2, y2), 255, 1)
+        
+        # Mask stitches to only inside this contour
+        stitch_pattern = cv2.bitwise_and(stitch_pattern, contour_mask)
+    
+    print(f"   Contour stitching: Generated {np.count_nonzero(stitch_pattern)} stitch pixels")
+    
+    return stitch_pattern
+
+
 def generate_simple_stitch_pattern(design_alpha, angle=45, spacing=3):
     """
     Generate simplified embroidery stitch pattern.
@@ -201,17 +267,14 @@ def generate_thread_texture(size=(256, 256)):
 
 def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=5):
     """
-    Apply clean embroidery effect to design image.
+    Apply clean embroidery effect with contour-following stitches.
     
-    Minimal approach that preserves design colors:
-    1. Generate visible stitch lines with spacing
-    2. Add dark edges to define each stitch line
-    3. Add subtle center highlight for thread shine
-    4. NO random noise, NO color shifting
+    Uses contour detection to create stitches that follow the shapes
+    in the design, rather than uniform parallel lines.
     
     Args:
         design_bgra: Design with alpha channel (BGRA)
-        stitch_angle: Stitch direction in degrees
+        stitch_angle: Not used (kept for compatibility)
         stitch_spacing: Pixels between stitch lines
     
     Returns:
@@ -223,63 +286,43 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=5):
     alpha = design_bgra[:, :, 3]
     design_bgr = design_bgra[:, :, :3].copy()
     
-    # Smart auto-detect stitch angle from design shape
-    if w > h * 1.3:  # Wider design → vertical stitches
-        stitch_angle = 90
-    elif h > w * 1.3:  # Taller design → horizontal stitches
-        stitch_angle = 0
-    else:  # Square-ish → diagonal stitches
-        stitch_angle = 45
+    print(f"  Embroidery: Using contour-following stitches (design {w}x{h})")
     
-    print(f"  Embroidery: Auto-detected stitch angle = {stitch_angle}° (design {w}x{h})")
+    # 1. Generate contour-following stitch pattern
+    stitch_base = generate_contour_following_stitches(alpha, spacing=stitch_spacing)
     
-    # 1. Generate base stitch pattern
-    stitch_base = generate_simple_stitch_pattern(alpha, angle=stitch_angle, spacing=stitch_spacing)
-    
-    print(f"  Embroidery: Base pattern {np.count_nonzero(stitch_base)} pixels")
-    
-    # 2. Thicken stitches to 2-3px
-    kernel_thicken = np.ones((2, 1), np.uint8) if stitch_angle == 0 else \
-                     np.ones((1, 2), np.uint8) if stitch_angle == 90 else \
-                     np.ones((2, 2), np.uint8)
-    
+    # 2. Thicken stitches slightly (1-2px)
+    kernel_thicken = np.ones((2, 2), np.uint8)
     stitch_thick = cv2.dilate(stitch_base, kernel_thicken, iterations=1)
     
-    # 3. Create edge definition: thin dark outline around each stitch
-    kernel_edge = np.ones((3, 1), np.uint8) if stitch_angle == 0 else \
-                  np.ones((1, 3), np.uint8) if stitch_angle == 90 else \
-                  np.ones((3, 3), np.uint8)
-    
+    # 3. Create edge definition
+    kernel_edge = np.ones((3, 3), np.uint8)
     stitch_outer = cv2.dilate(stitch_thick, kernel_edge, iterations=1)
     stitch_edges = cv2.subtract(stitch_outer, stitch_thick)
     
-    # 4. Create center highlight: thin bright line in middle of each stitch
-    kernel_erode = np.ones((2, 1), np.uint8) if stitch_angle == 0 else \
-                   np.ones((1, 2), np.uint8) if stitch_angle == 90 else \
-                   np.ones((2, 2), np.uint8)
+    # 4. Create center highlight
+    stitch_center = cv2.erode(stitch_thick, kernel_thicken, iterations=1)
     
-    stitch_center = cv2.erode(stitch_thick, kernel_erode, iterations=1)
-    
-    # 5. Apply effect to design - PRESERVE COLORS
+    # 5. Apply effect - preserve colors
     embroidered_bgr = design_bgr.copy().astype(np.int16)
     
-    # Darken edges SLIGHTLY (only 20 brightness units)
+    # Subtle dark edges
     edge_mask = (stitch_edges > 0)
-    embroidered_bgr[edge_mask] = np.clip(embroidered_bgr[edge_mask] - 20, 0, 255)
+    embroidered_bgr[edge_mask] = np.clip(embroidered_bgr[edge_mask] - 15, 0, 255)
     
-    # Brighten center for shine (only 40 brightness units)
+    # Subtle center shine
     center_mask = (stitch_center > 0)
-    embroidered_bgr[center_mask] = np.clip(embroidered_bgr[center_mask] + 40, 0, 255)
+    embroidered_bgr[center_mask] = np.clip(embroidered_bgr[center_mask] + 35, 0, 255)
     
     embroidered_bgr = embroidered_bgr.astype(np.uint8)
     
-    # 6. Combine with original alpha channel
+    # 6. Combine with alpha
     embroidered = cv2.merge([embroidered_bgr[:, :, 0], 
                              embroidered_bgr[:, :, 1], 
                              embroidered_bgr[:, :, 2], 
                              alpha])
     
-    print(f"  Embroidery: Clean effect applied, edges={np.count_nonzero(stitch_edges)}, centers={np.count_nonzero(stitch_center)}")
+    print(f"  Embroidery: Contour-following effect applied")
     
     return embroidered
 
