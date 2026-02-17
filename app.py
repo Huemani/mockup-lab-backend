@@ -273,47 +273,176 @@ def generate_thread_texture(size=(256, 256)):
 
 def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     """
-    Apply embroidery effect - SIMPLIFIED TEST VERSION
+    Apply advanced realistic embroidery effect.
+    
+    Features:
+    1. Directional edge bevel (raised appearance)
+    2. Uniform diagonal stitches  
+    3. Anisotropic thread shine (directional highlights)
+    4. Thread fiber texture (organic variation)
+    5. Color saturation boost (vibrant thread appearance)
+    
+    Args:
+        design_bgra: Design with alpha channel (BGRA)
+        stitch_angle: Stitch direction (always 45°)
+        stitch_spacing: Pixels between stitch lines
+    
+    Returns:
+        Tuple of (embroidered_bgra, shadow_mask)
     """
     h, w = design_bgra.shape[:2]
-    
-    # Extract alpha and BGR
     alpha = design_bgra[:, :, 3]
     design_bgr = design_bgra[:, :, :3].copy()
     
-    print(f"  Embroidery: TEST VERSION - input shape {design_bgra.shape}")
-    print(f"  Embroidery: Alpha range: {alpha.min()}-{alpha.max()}, non-zero pixels: {np.sum(alpha > 0)}")
+    print(f"  Embroidery: Advanced mode - {w}x{h}")
     
-    # SIMPLE TEST: Just darken everything by 30 to verify function is called
-    embroidered_bgr = design_bgr.astype(np.int16)
-    embroidered_bgr -= 30
+    # ==================================================================
+    # STEP 1: DIRECTIONAL EDGE BEVEL (raised 3D appearance)
+    # ==================================================================
+    
+    _, binary = cv2.threshold(alpha, 1, 255, cv2.THRESH_BINARY)
+    dist_transform = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
+    
+    if dist_transform.max() > 0:
+        dist_transform = dist_transform / dist_transform.max()
+    
+    # OUTWARD-facing edge normals (negated to flip from inward)
+    grad_x = -cv2.Sobel(dist_transform, cv2.CV_32F, 1, 0, ksize=5)
+    grad_y = -cv2.Sobel(dist_transform, cv2.CV_32F, 0, 1, ksize=5)
+    
+    # Only process pixels near edges
+    edge_mask = (dist_transform > 0) & (dist_transform < 0.3)
+    edge_mask_float = edge_mask.astype(np.float32)
+    
+    # Normalize gradients
+    grad_magnitude = np.sqrt(grad_x**2 + grad_y**2) + 1e-6
+    norm_grad_x = grad_x / grad_magnitude
+    norm_grad_y = grad_y / grad_magnitude
+    
+    # Light from top-right (45°)
+    light_x, light_y = 0.707, -0.707
+    light_facing = (norm_grad_x * light_x + norm_grad_y * light_y) * edge_mask_float
+    
+    # Split into highlight (faces light) and shadow (faces away)
+    highlight_mask = np.clip(light_facing, 0, None)
+    shadow_mask_edge = np.clip(-light_facing, 0, None)
+    
+    # Blur for smooth gradients
+    highlight_mask = cv2.GaussianBlur(highlight_mask, (7, 7), 0)
+    shadow_mask_edge = cv2.GaussianBlur(shadow_mask_edge, (7, 7), 0)
+    
+    # Normalize
+    if highlight_mask.max() > 0:
+        highlight_mask = highlight_mask / highlight_mask.max()
+    if shadow_mask_edge.max() > 0:
+        shadow_mask_edge = shadow_mask_edge / shadow_mask_edge.max()
+    
+    # Apply bevel
+    embroidered_bgr = design_bgr.copy().astype(np.float32)
+    embroidered_bgr -= shadow_mask_edge[:, :, np.newaxis] * 50
+    embroidered_bgr += highlight_mask[:, :, np.newaxis] * 60
     embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
     
-    print(f"  Embroidery: TEST - darkened by 30 (should be visible!)")
+    print(f"  Embroidery: ✓ Directional bevel")
     
-    # Generate simple stitches
-    stitch_pattern = generate_simple_stitch_pattern(alpha, angle=45, spacing=4)
-    print(f"  Embroidery: Stitch pixels: {np.sum(stitch_pattern > 0)}")
+    # ==================================================================
+    # STEP 2: STITCH PATTERN + ANISOTROPIC SHINE
+    # ==================================================================
     
-    # Brighten stitches
+    # Generate stitches
+    stitch_pattern = generate_simple_stitch_pattern(alpha, angle=45, spacing=stitch_spacing)
+    kernel = np.ones((2, 2), np.uint8)
+    stitch_thick = cv2.dilate(stitch_pattern, kernel, iterations=1)
+    
+    # Edges and centers for definition
+    stitch_outer = cv2.dilate(stitch_thick, np.ones((3, 3), np.uint8), iterations=1)
+    stitch_edges = cv2.subtract(stitch_outer, stitch_thick)
+    stitch_center = cv2.erode(stitch_thick, kernel, iterations=1)
+    
+    # ANISOTROPIC SHINE: highlights vary along perpendicular axis to stitches
+    # For 45° stitches, use diagonal pattern
+    y_coords, x_coords = np.ogrid[:h, :w]
+    
+    # Create wave pattern perpendicular to stitch direction
+    perp_pattern = ((x_coords + y_coords) % 8) / 8.0
+    anisotropic_factor = 0.5 + 0.5 * np.sin(perp_pattern * np.pi * 2)
+    
+    # Apply only to stitch centers
+    anisotropic_shine = (stitch_center > 0).astype(np.float32) * anisotropic_factor
+    
+    # Apply stitch details
     embroidered_bgr = embroidered_bgr.astype(np.int16)
-    embroidered_bgr[stitch_pattern > 0] += 80  # Very bright to be visible
+    embroidered_bgr[stitch_edges > 0] -= 25  # Dark edges
+    
+    # Anisotropic highlight (varies 30-50 based on position)
+    for c in range(3):
+        embroidered_bgr[:, :, c] += (anisotropic_shine * 45).astype(np.int16)
+    
     embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
     
-    print(f"  Embroidery: Brightened stitches by +80")
+    print(f"  Embroidery: ✓ Stitches + anisotropic shine")
     
-    # No shadow mask for now
-    shadow_mask = np.zeros((h, w), dtype=np.float32)
+    # ==================================================================
+    # STEP 3: THREAD FIBER TEXTURE
+    # ==================================================================
+    
+    # Fine-grain noise for thread texture
+    np.random.seed(42)
+    fiber_noise = np.random.randint(-10, 10, (h, w), dtype=np.int16)
+    fiber_noise = cv2.GaussianBlur(fiber_noise.astype(np.float32), (3, 3), 0).astype(np.int16)
+    
+    # Apply only to stitch areas
+    stitch_mask = (stitch_thick > 0)
+    fiber_texture = fiber_noise * stitch_mask.astype(np.int16)
+    
+    embroidered_bgr = embroidered_bgr.astype(np.int16)
+    embroidered_bgr += fiber_texture[:, :, np.newaxis]
+    embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
+    
+    print(f"  Embroidery: ✓ Thread fiber texture")
+    
+    # ==================================================================
+    # STEP 4: COLOR SATURATION BOOST
+    # ==================================================================
+    
+    # Convert to HSV and boost saturation
+    embroidered_hsv = cv2.cvtColor(embroidered_bgr, cv2.COLOR_BGR2HSV)
+    embroidered_hsv[:, :, 1] = np.clip(
+        embroidered_hsv[:, :, 1].astype(np.float32) * 1.18, 
+        0, 255
+    ).astype(np.uint8)
+    embroidered_bgr = cv2.cvtColor(embroidered_hsv, cv2.COLOR_HSV2BGR)
+    
+    print(f"  Embroidery: ✓ Saturation boost")
+    
+    # ==================================================================
+    # STEP 5: PROJECTED SHADOW MASK
+    # ==================================================================
+    
+    # Offset shadow (3px right, 4px down)
+    shadow_projection = alpha.copy()
+    M_shadow = np.float32([[1, 0, 3], [0, 1, 4]])
+    shadow_projection = cv2.warpAffine(shadow_projection, M_shadow, (w, h))
+    
+    # Blur for soft shadow
+    shadow_projection = cv2.GaussianBlur(shadow_projection, (13, 13), 0).astype(np.float32) / 255.0
+    
+    # Don't shadow where design itself is
+    shadow_projection[alpha > 0] = 0
+    
+    print(f"  Embroidery: ✓ Projected shadow mask")
     
     # Combine with alpha
-    embroidered = cv2.merge([embroidered_bgr[:, :, 0], 
-                             embroidered_bgr[:, :, 1], 
-                             embroidered_bgr[:, :, 2], 
-                             alpha])
+    embroidered = cv2.merge([
+        embroidered_bgr[:, :, 0],
+        embroidered_bgr[:, :, 1],
+        embroidered_bgr[:, :, 2],
+        alpha
+    ])
     
-    print(f"  Embroidery: Output shape {embroidered.shape}")
+    print(f"  Embroidery: Complete - all features applied")
     
-    return embroidered, shadow_mask
+    return embroidered, shadow_projection
 
 
 def warp_design_with_displacement(design_bgra, disp_map, strength):
