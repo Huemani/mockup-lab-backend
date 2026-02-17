@@ -232,8 +232,8 @@ def generate_simple_stitch_pattern(design_alpha, angle=45, spacing=3):
             x2 = int(w/2 + offset * perp_dx + t2 * dx)
             y2 = int(h/2 + offset * perp_dy + t2 * dy)
             
-            # Draw thicker line (thickness=2 instead of 1)
-            cv2.line(stitch_pattern, (x1, y1), (x2, y2), 255, 2)
+            # Draw THIN crisp line (thickness=1 for sharp SILK-like stitches)
+            cv2.line(stitch_pattern, (x1, y1), (x2, y2), 255, 1)
             lines_drawn += 1
     
     print(f"   Stitch generation: Drew {lines_drawn} lines, pattern max={stitch_pattern.max()}, non-zero pixels before mask={np.count_nonzero(stitch_pattern)}")
@@ -346,60 +346,45 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     print(f"  Embroidery: ✓ Smooth directional bevel")
     
     # ==================================================================
-    # STEP 2: STITCH PATTERN + ANISOTROPIC SHINE
+    # STEP 2: SHARP CRISP STITCHES (like SILK reference)
     # ==================================================================
     
-    # Generate stitches with DENSE spacing (3px)
-    stitch_pattern = generate_simple_stitch_pattern(alpha, angle=45, spacing=3)
-    kernel = np.ones((2, 2), np.uint8)
-    stitch_thick = cv2.dilate(stitch_pattern, kernel, iterations=1)
+    # Generate THIN stitches with VERY TIGHT spacing
+    stitch_pattern = generate_simple_stitch_pattern(alpha, angle=45, spacing=2)
     
-    # Edges and centers for definition
-    stitch_outer = cv2.dilate(stitch_thick, np.ones((3, 3), np.uint8), iterations=1)
-    stitch_edges = cv2.subtract(stitch_outer, stitch_thick)
-    stitch_center = cv2.erode(stitch_thick, kernel, iterations=1)
+    # NO DILATE - keep stitches as sharp 1px lines!
+    # SILK reference shows crisp, thin lines - not thick fuzzy ones
     
-    # ANISOTROPIC SHINE: highlights vary along perpendicular axis to stitches
-    # For 45° stitches, use diagonal pattern
-    y_coords, x_coords = np.ogrid[:h, :w]
+    # For highlights, just brighten the stitch pixels directly
+    # No edges, no centers - just SHARP bright lines
     
-    # Create wave pattern perpendicular to stitch direction
-    perp_pattern = ((x_coords + y_coords) % 8) / 8.0
-    anisotropic_factor = 0.5 + 0.5 * np.sin(perp_pattern * np.pi * 2)
-    
-    # Apply only to stitch centers
-    anisotropic_shine = (stitch_center > 0).astype(np.float32) * anisotropic_factor
-    
-    # Apply stitch details
     embroidered_bgr = embroidered_bgr.astype(np.int16)
-    embroidered_bgr[stitch_edges > 0] -= 25  # Dark edges
     
-    # Anisotropic highlight (varies 30-50 based on position)
-    for c in range(3):
-        embroidered_bgr[:, :, c] += (anisotropic_shine * 45).astype(np.int16)
+    # Bright highlights on stitch lines (+50)
+    embroidered_bgr[stitch_pattern > 0] += 50
     
     embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
     
-    print(f"  Embroidery: ✓ Stitches + anisotropic shine")
+    print(f"  Embroidery: ✓ Sharp crisp stitches")
     
     # ==================================================================
-    # STEP 3: THREAD FIBER TEXTURE
+    # STEP 3: SUBTLE THREAD TEXTURE (NO BLUR - keep sharp)
     # ==================================================================
     
-    # Fine-grain noise for thread texture
+    # Very subtle noise for thread texture
+    # NO Gaussian blur - SILK reference is sharp, not fuzzy
     np.random.seed(42)
-    fiber_noise = np.random.randint(-10, 10, (h, w), dtype=np.int16)
-    fiber_noise = cv2.GaussianBlur(fiber_noise.astype(np.float32), (3, 3), 0).astype(np.int16)
+    fiber_noise = np.random.randint(-5, 5, (h, w), dtype=np.int16)
     
-    # Apply only to stitch areas
-    stitch_mask = (stitch_thick > 0)
+    # Apply only to stitch areas, NO BLUR
+    stitch_mask = (stitch_pattern > 0)
     fiber_texture = fiber_noise * stitch_mask.astype(np.int16)
     
     embroidered_bgr = embroidered_bgr.astype(np.int16)
     embroidered_bgr += fiber_texture[:, :, np.newaxis]
     embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
     
-    print(f"  Embroidery: ✓ Thread fiber texture")
+    print(f"  Embroidery: ✓ Subtle sharp texture")
     
     # ==================================================================
     # STEP 4: COLOR SATURATION BOOST
@@ -730,7 +715,7 @@ async def generate_mockup(request: MockupRequest):
             design_canvas, shadow_mask = apply_embroidery_effect(
                 design_canvas,
                 stitch_angle=45,  # Will be auto-detected inside function
-                stitch_spacing=3  # Dense spacing for realistic embroidery
+                stitch_spacing=2  # Very tight spacing for SILK-like crisp stitches
             )
             print("✓ Embroidery effect applied")
             print(f"   Design canvas after embroidery: {design_canvas.shape}")
