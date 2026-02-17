@@ -70,6 +70,7 @@ class MockupRequest(BaseModel):
     designNaturalWidth: int = 0     # design natural px width
     designNaturalHeight: int = 0    # design natural px height
     displacementStrength: int = 10
+    shadowStrength: float = 0.5      # 0.0 to 1.0, shadow/highlight blend strength
 
 
 def download_image_from_url(url: str, keep_alpha: bool = False):
@@ -181,7 +182,7 @@ def place_and_resize_design(tshirt_shape, design_bgra, pos_x, pos_y, design_widt
     return canvas
 
 
-def alpha_composite_design(tshirt_bgr, warped_design_bgra, tshirt_bgr_original):
+def alpha_composite_design(tshirt_bgr, warped_design_bgra, tshirt_bgr_original, shadow_strength=0.5):
     """
     Composite the warped design onto the t-shirt with realistic shadow/highlight integration.
 
@@ -227,7 +228,6 @@ def alpha_composite_design(tshirt_bgr, warped_design_bgra, tshirt_bgr_original):
 
     # Blend soft light result at controlled strength, only where design exists
     # strength=0.5 means 50% shadow/highlight influence from fabric
-    shadow_strength = 0.5
     result = composited * (1.0 - shadow_strength * alpha_3ch) + soft_light * (shadow_strength * alpha_3ch)
 
     result = np.clip(result * 255, 0, 255).astype(np.uint8)
@@ -385,7 +385,7 @@ async def generate_mockup(request: MockupRequest):
 
         # --- 6. Composite warped design onto t-shirt ---
         print("→ Compositing design onto t-shirt...")
-        result = alpha_composite_design(tshirt_bgr, warped_design, tshirt_bgr)
+        result = alpha_composite_design(tshirt_bgr, warped_design, tshirt_bgr, request.shadowStrength)
         print("✓ Composite complete")
 
         # --- 7. Upload to Cloudinary ---
