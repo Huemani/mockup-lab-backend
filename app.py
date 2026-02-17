@@ -201,13 +201,13 @@ def generate_thread_texture(size=(256, 256)):
 
 def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=5):
     """
-    Apply realistic embroidery effect to design image.
+    Apply clean embroidery effect to design image.
     
-    Upgraded approach:
-    1. Generate thicker stitch lines (2-3px wide)
-    2. Add per-thread surface texture (fiber details)
-    3. Create strong depth with shadows around raised threads
-    4. Add directional highlights for thread shine
+    Minimal approach that preserves design colors:
+    1. Generate visible stitch lines with spacing
+    2. Add dark edges to define each stitch line
+    3. Add subtle center highlight for thread shine
+    4. NO random noise, NO color shifting
     
     Args:
         design_bgra: Design with alpha channel (BGRA)
@@ -233,70 +233,45 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=5):
     
     print(f"  Embroidery: Auto-detected stitch angle = {stitch_angle}° (design {w}x{h})")
     
-    # 1. Generate stitch pattern with THICKER lines (3px width)
-    stitch_pattern = generate_simple_stitch_pattern(alpha, angle=stitch_angle, spacing=stitch_spacing)
+    # 1. Generate base stitch pattern
+    stitch_base = generate_simple_stitch_pattern(alpha, angle=stitch_angle, spacing=stitch_spacing)
     
-    # Thicken stitches to 3px width
-    kernel_line = np.ones((3, 1), np.uint8) if stitch_angle == 0 else \
+    print(f"  Embroidery: Base pattern {np.count_nonzero(stitch_base)} pixels")
+    
+    # 2. Thicken stitches to 2-3px
+    kernel_thicken = np.ones((2, 1), np.uint8) if stitch_angle == 0 else \
+                     np.ones((1, 2), np.uint8) if stitch_angle == 90 else \
+                     np.ones((2, 2), np.uint8)
+    
+    stitch_thick = cv2.dilate(stitch_base, kernel_thicken, iterations=1)
+    
+    # 3. Create edge definition: thin dark outline around each stitch
+    kernel_edge = np.ones((3, 1), np.uint8) if stitch_angle == 0 else \
                   np.ones((1, 3), np.uint8) if stitch_angle == 90 else \
                   np.ones((3, 3), np.uint8)
-    stitch_pattern = cv2.dilate(stitch_pattern, kernel_line, iterations=1)
     
-    print(f"  Embroidery: Thickened stitches, {np.count_nonzero(stitch_pattern)} total pixels")
+    stitch_outer = cv2.dilate(stitch_thick, kernel_edge, iterations=1)
+    stitch_edges = cv2.subtract(stitch_outer, stitch_thick)
     
-    # 2. Add surface texture to threads
-    # Create fine noise pattern for thread fiber texture
-    noise = np.random.randint(-15, 15, (h, w), dtype=np.int16)
-    noise = cv2.GaussianBlur(noise.astype(np.float32), (3, 3), 0).astype(np.int16)
+    # 4. Create center highlight: thin bright line in middle of each stitch
+    kernel_erode = np.ones((2, 1), np.uint8) if stitch_angle == 0 else \
+                   np.ones((1, 2), np.uint8) if stitch_angle == 90 else \
+                   np.ones((2, 2), np.uint8)
     
-    # Apply texture only to stitch areas
-    stitch_mask = (stitch_pattern > 0).astype(np.float32)
-    thread_texture = noise * stitch_mask
+    stitch_center = cv2.erode(stitch_thick, kernel_erode, iterations=1)
     
-    # 3. Create STRONG depth effect with shadows
-    kernel = np.ones((5, 5), np.uint8)
+    # 5. Apply effect to design - PRESERVE COLORS
+    embroidered_bgr = design_bgr.copy().astype(np.int16)
     
-    # Create shadow area around stitches
-    stitch_shadow = cv2.dilate(stitch_pattern, kernel, iterations=2)
-    stitch_shadow = cv2.subtract(stitch_shadow, stitch_pattern)
+    # Darken edges SLIGHTLY (only 20 brightness units)
+    edge_mask = (stitch_edges > 0)
+    embroidered_bgr[edge_mask] = np.clip(embroidered_bgr[edge_mask] - 20, 0, 255)
     
-    # Distance transform for gradient shadow
-    stitch_shadow_float = stitch_shadow.astype(np.float32) / 255.0
-    shadow_blur = cv2.GaussianBlur(stitch_shadow_float, (7, 7), 0)
+    # Brighten center for shine (only 40 brightness units)
+    center_mask = (stitch_center > 0)
+    embroidered_bgr[center_mask] = np.clip(embroidered_bgr[center_mask] + 40, 0, 255)
     
-    # 4. Build depth map
-    depth_map = np.zeros((h, w), dtype=np.float32)
-    
-    # Strong shadows (darken by 25%)
-    depth_map[shadow_blur > 0] = -0.25 * shadow_blur[shadow_blur > 0]
-    
-    # Raised highlights on stitches (brighten by 30%)
-    depth_map[stitch_pattern > 0] = 0.30
-    
-    # Apply depth to design
-    embroidered_bgr = design_bgr.copy().astype(np.float32)
-    for c in range(3):
-        embroidered_bgr[:, :, c] = embroidered_bgr[:, :, c] * (1.0 + depth_map)
-        # Add thread surface texture
-        embroidered_bgr[:, :, c] = embroidered_bgr[:, :, c] + thread_texture
-    
-    embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
-    
-    # 5. Add directional thread shine (anisotropic highlight)
-    # Simulate light reflection along thread direction
-    shine_kernel = np.ones((1, 7), np.uint8) if stitch_angle == 0 else \
-                   np.ones((7, 1), np.uint8) if stitch_angle == 90 else \
-                   np.ones((5, 5), np.uint8)
-    
-    shine_mask = cv2.erode(stitch_pattern, shine_kernel, iterations=1)
-    shine_intensity = 50  # Strong highlight
-    
-    for c in range(3):
-        embroidered_bgr[:, :, c] = np.clip(
-            embroidered_bgr[:, :, c].astype(np.int16) + 
-            ((shine_mask.astype(np.float32) / 255.0) * shine_intensity).astype(np.int16),
-            0, 255
-        ).astype(np.uint8)
+    embroidered_bgr = embroidered_bgr.astype(np.uint8)
     
     # 6. Combine with original alpha channel
     embroidered = cv2.merge([embroidered_bgr[:, :, 0], 
@@ -304,7 +279,7 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=5):
                              embroidered_bgr[:, :, 2], 
                              alpha])
     
-    print(f"  Embroidery: Realistic effect applied, output shape={embroidered.shape}")
+    print(f"  Embroidery: Clean effect applied, edges={np.count_nonzero(stitch_edges)}, centers={np.count_nonzero(stitch_center)}")
     
     return embroidered
 
