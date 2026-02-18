@@ -273,7 +273,7 @@ def generate_thread_texture(size=(256, 256)):
 
 def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     """
-    Apply advanced realistic embroidery effect with scale-adaptive parameters.
+    Apply advanced realistic embroidery effect.
     
     Features:
     1. Directional edge bevel (raised appearance)
@@ -284,7 +284,7 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     Args:
         design_bgra: Design with alpha channel (BGRA)
         stitch_angle: Stitch direction (always 45°)
-        stitch_spacing: Base spacing (scaled automatically)
+        stitch_spacing: Pixels between stitch lines
     
     Returns:
         Tuple of (embroidered_bgra, shadow_mask)
@@ -293,17 +293,14 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     alpha = design_bgra[:, :, 3]
     design_bgr = design_bgra[:, :, :3].copy()
     
-    # ==================================================================
-    # SCALE-ADAPTIVE PARAMETERS (only addition - keeps everything else same!)
-    # ==================================================================
-    
+    # Calculate scale-adaptive parameters (based on 400px reference width)
     scale_factor = w / 400.0
     adaptive_spacing = max(2, int(2 * scale_factor))
-    adaptive_blur_size = max(5, int(11 * scale_factor))
-    if adaptive_blur_size % 2 == 0:
-        adaptive_blur_size += 1
+    adaptive_blur = max(5, int(11 * scale_factor))
+    if adaptive_blur % 2 == 0:
+        adaptive_blur += 1  # Must be odd for GaussianBlur
     
-    print(f"  Embroidery: {w}x{h}, scale={scale_factor:.2f}, spacing={adaptive_spacing}px, blur={adaptive_blur_size}px")
+    print(f"  Embroidery: {w}x{h}, scale={scale_factor:.2f}, spacing={adaptive_spacing}px, blur={adaptive_blur}px")
     
     # ==================================================================
     # STEP 1: DIRECTIONAL EDGE BEVEL (raised 3D appearance)
@@ -315,31 +312,38 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     if dist_transform.max() > 0:
         dist_transform = dist_transform / dist_transform.max()
     
+    # OUTWARD-facing edge normals (negated to flip from inward)
     grad_x = -cv2.Sobel(dist_transform, cv2.CV_32F, 1, 0, ksize=5)
     grad_y = -cv2.Sobel(dist_transform, cv2.CV_32F, 0, 1, ksize=5)
     
+    # WIDER edge mask for smoother gradients
     edge_mask = (dist_transform > 0) & (dist_transform < 0.5)
     edge_mask_float = edge_mask.astype(np.float32)
     
+    # Normalize gradients
     grad_magnitude = np.sqrt(grad_x**2 + grad_y**2) + 1e-6
     norm_grad_x = grad_x / grad_magnitude
     norm_grad_y = grad_y / grad_magnitude
     
+    # Light from top-right (45°)
     light_x, light_y = 0.707, -0.707
     light_facing = (norm_grad_x * light_x + norm_grad_y * light_y) * edge_mask_float
     
+    # Split into highlight (faces light) and shadow (faces away)
     highlight_mask = np.clip(light_facing, 0, None)
     shadow_mask_edge = np.clip(-light_facing, 0, None)
     
-    # USE ADAPTIVE BLUR (was fixed 11x11)
-    highlight_mask = cv2.GaussianBlur(highlight_mask, (adaptive_blur_size, adaptive_blur_size), 0)
-    shadow_mask_edge = cv2.GaussianBlur(shadow_mask_edge, (adaptive_blur_size, adaptive_blur_size), 0)
+    # Blur for smooth gradients (adaptive based on design size)
+    highlight_mask = cv2.GaussianBlur(highlight_mask, (adaptive_blur, adaptive_blur), 0)
+    shadow_mask_edge = cv2.GaussianBlur(shadow_mask_edge, (adaptive_blur, adaptive_blur), 0)
     
+    # Normalize
     if highlight_mask.max() > 0:
         highlight_mask = highlight_mask / highlight_mask.max()
     if shadow_mask_edge.max() > 0:
         shadow_mask_edge = shadow_mask_edge / shadow_mask_edge.max()
     
+    # Apply bevel with SUBTLE strength to preserve original color
     embroidered_bgr = design_bgr.copy().astype(np.float32)
     embroidered_bgr -= shadow_mask_edge[:, :, np.newaxis] * 35
     embroidered_bgr += highlight_mask[:, :, np.newaxis] * 40
@@ -348,25 +352,30 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     print(f"  Embroidery: ✓ Smooth directional bevel")
     
     # ==================================================================
-    # STEP 2: SHARP CRISP STITCHES
+    # STEP 2: SHARP CRISP STITCHES (like SILK reference)
     # ==================================================================
     
-    # USE ADAPTIVE SPACING (was fixed 2)
+    # Generate THIN stitches with adaptive spacing (scales with design size)
     stitch_pattern = generate_simple_stitch_pattern(alpha, angle=45, spacing=adaptive_spacing)
     
     embroidered_bgr = embroidered_bgr.astype(np.int16)
+    
+    # REDUCED highlights on stitch lines to preserve color
     embroidered_bgr[stitch_pattern > 0] += 35
+    
     embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
     
     print(f"  Embroidery: ✓ Sharp crisp stitches")
     
     # ==================================================================
-    # STEP 3: SUBTLE THREAD TEXTURE
+    # STEP 3: SUBTLE THREAD TEXTURE (NO BLUR - keep sharp)
     # ==================================================================
     
+    # Very subtle noise for thread texture
     np.random.seed(42)
     fiber_noise = np.random.randint(-5, 5, (h, w), dtype=np.int16)
     
+    # Apply only to stitch areas, NO BLUR
     stitch_mask = (stitch_pattern > 0)
     fiber_texture = fiber_noise * stitch_mask.astype(np.int16)
     
@@ -377,9 +386,10 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     print(f"  Embroidery: ✓ Subtle sharp texture")
     
     # ==================================================================
-    # STEP 4: SUBTLE SATURATION BOOST
+    # STEP 4: SUBTLE SATURATION BOOST (preserve darkness)
     # ==================================================================
     
+    # Convert to HSV and boost saturation SLIGHTLY
     embroidered_hsv = cv2.cvtColor(embroidered_bgr, cv2.COLOR_BGR2HSV)
     embroidered_hsv[:, :, 1] = np.clip(
         embroidered_hsv[:, :, 1].astype(np.float32) * 1.10,
@@ -393,15 +403,20 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     # STEP 5: PROJECTED SHADOW MASK
     # ==================================================================
     
+    # Offset shadow (3px right, 4px down)
     shadow_projection = alpha.copy()
     M_shadow = np.float32([[1, 0, 3], [0, 1, 4]])
     shadow_projection = cv2.warpAffine(shadow_projection, M_shadow, (w, h))
     
+    # Blur for soft shadow
     shadow_projection = cv2.GaussianBlur(shadow_projection, (13, 13), 0).astype(np.float32) / 255.0
+    
+    # Don't shadow where design itself is
     shadow_projection[alpha > 0] = 0
     
     print(f"  Embroidery: ✓ Projected shadow mask")
     
+    # Combine with alpha
     embroidered = cv2.merge([
         embroidered_bgr[:, :, 0],
         embroidered_bgr[:, :, 1],
@@ -409,7 +424,7 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
         alpha
     ])
     
-    print(f"  Embroidery: Complete")
+    print(f"  Embroidery: Complete - all features applied")
     
     return embroidered, shadow_projection
 
