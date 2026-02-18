@@ -293,14 +293,13 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     alpha = design_bgra[:, :, 3]
     design_bgr = design_bgra[:, :, :3].copy()
     
-    # Calculate scale-adaptive parameters (based on 400px reference width)
+    # Calculate scale-adaptive blur ONLY (spacing stays tight at 2px always)
     scale_factor = w / 400.0
-    adaptive_spacing = max(2, int(2 * scale_factor))
     adaptive_blur = max(5, int(11 * scale_factor))
     if adaptive_blur % 2 == 0:
         adaptive_blur += 1  # Must be odd for GaussianBlur
     
-    print(f"  Embroidery: {w}x{h}, scale={scale_factor:.2f}, spacing={adaptive_spacing}px, blur={adaptive_blur}px")
+    print(f"  Embroidery: {w}x{h}, scale={scale_factor:.2f}, blur={adaptive_blur}px")
     
     # ==================================================================
     # STEP 1: DIRECTIONAL EDGE BEVEL (raised 3D appearance)
@@ -355,8 +354,8 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     # STEP 2: SHARP CRISP STITCHES (like SILK reference)
     # ==================================================================
     
-    # Generate THIN stitches with adaptive spacing (scales with design size)
-    stitch_pattern = generate_simple_stitch_pattern(alpha, angle=45, spacing=adaptive_spacing)
+    # Generate THIN stitches with FIXED 2px spacing (always tight)
+    stitch_pattern = generate_simple_stitch_pattern(alpha, angle=45, spacing=2)
     
     embroidered_bgr = embroidered_bgr.astype(np.int16)
     
