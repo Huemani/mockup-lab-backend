@@ -293,88 +293,111 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     alpha = design_bgra[:, :, 3]
     design_bgr = design_bgra[:, :, :3].copy()
     
-    # Calculate scale-adaptive blur - MORE CONSERVATIVE (sharper edges)
-    scale_factor = w / 400.0
-    adaptive_blur = max(7, min(11, int(9 * scale_factor)))  # Tighter range: 7-11px
-    if adaptive_blur % 2 == 0:
-        adaptive_blur += 1
-    
-    print(f"  Embroidery: {w}x{h}, scale={scale_factor:.2f}, blur={adaptive_blur}px (sharp)")
-    
     # ==================================================================
-    # STEP 1: DIRECTIONAL EDGE BEVEL (raised 3D appearance)
+    # STEP 1: PROJECTED SHADOW AROUND DESIGN (like SILK reference)
     # ==================================================================
     
+    # Create strong shadow AROUND entire design edge
     _, binary = cv2.threshold(alpha, 1, 255, cv2.THRESH_BINARY)
+    
+    # Dilate to create shadow zone around design
+    shadow_kernel = np.ones((8, 8), np.uint8)
+    shadow_area = cv2.dilate(binary, shadow_kernel, iterations=2)
+    shadow_ring = cv2.subtract(shadow_area, binary)
+    
+    # Blur shadow for soft falloff
+    shadow_ring_blur = cv2.GaussianBlur(shadow_ring.astype(np.float32), (15, 15), 0) / 255.0
+    
+    # Apply shadow to design (darkens area around edges)
+    embroidered_bgr = design_bgr.copy().astype(np.float32)
+    embroidered_bgr -= shadow_ring_blur[:, :, np.newaxis] * 50  # Strong shadow around edges
+    embroidered_bgr = np.clip(embroidered_bgr, 0, 255)
+    
+    print(f"  Embroidery: ✓ Projected shadow around design")
+    
+    # ==================================================================
+    # STEP 2: DARK EDGE OUTLINE (separation from fabric)
+    # ==================================================================
+    
+    # Create very dark edge line (like cliff edge where thread meets fabric)
+    edge_kernel = np.ones((3, 3), np.uint8)
+    dilated_edge = cv2.dilate(binary, edge_kernel, iterations=1)
+    edge_line = cv2.subtract(dilated_edge, binary)
+    
+    # Apply strong darkening to edge
+    edge_mask = (edge_line > 0)
+    embroidered_bgr[edge_mask] *= 0.4  # Darken by 60%
+    
+    print(f"  Embroidery: ✓ Dark edge outline")
+    
+    # ==================================================================
+    # STEP 3: DIRECTIONAL BEVEL (raised appearance)
+    # ==================================================================
+    
     dist_transform = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
     
     if dist_transform.max() > 0:
         dist_transform = dist_transform / dist_transform.max()
     
-    # OUTWARD-facing edge normals (negated to flip from inward)
+    # OUTWARD-facing edge normals
     grad_x = -cv2.Sobel(dist_transform, cv2.CV_32F, 1, 0, ksize=5)
     grad_y = -cv2.Sobel(dist_transform, cv2.CV_32F, 0, 1, ksize=5)
     
-    # WIDER edge mask for smoother gradients
-    edge_mask = (dist_transform > 0) & (dist_transform < 0.5)
-    edge_mask_float = edge_mask.astype(np.float32)
+    # Wider edge mask for bevel
+    edge_mask_bevel = (dist_transform > 0) & (dist_transform < 0.6)
+    edge_mask_float = edge_mask_bevel.astype(np.float32)
     
     # Normalize gradients
     grad_magnitude = np.sqrt(grad_x**2 + grad_y**2) + 1e-6
     norm_grad_x = grad_x / grad_magnitude
     norm_grad_y = grad_y / grad_magnitude
     
-    # Light from top-right (45°)
+    # Light from top-right
     light_x, light_y = 0.707, -0.707
     light_facing = (norm_grad_x * light_x + norm_grad_y * light_y) * edge_mask_float
     
-    # Split into highlight (faces light) and shadow (faces away)
     highlight_mask = np.clip(light_facing, 0, None)
     shadow_mask_edge = np.clip(-light_facing, 0, None)
     
-    # Blur for smooth gradients (adaptive based on design size)
-    highlight_mask = cv2.GaussianBlur(highlight_mask, (adaptive_blur, adaptive_blur), 0)
-    shadow_mask_edge = cv2.GaussianBlur(shadow_mask_edge, (adaptive_blur, adaptive_blur), 0)
+    # Sharper blur
+    highlight_mask = cv2.GaussianBlur(highlight_mask, (9, 9), 0)
+    shadow_mask_edge = cv2.GaussianBlur(shadow_mask_edge, (9, 9), 0)
     
-    # Normalize
     if highlight_mask.max() > 0:
         highlight_mask = highlight_mask / highlight_mask.max()
     if shadow_mask_edge.max() > 0:
         shadow_mask_edge = shadow_mask_edge / shadow_mask_edge.max()
     
-    # Apply STRONGER bevel for pronounced 3D effect
-    embroidered_bgr = design_bgr.copy().astype(np.float32)
-    embroidered_bgr -= shadow_mask_edge[:, :, np.newaxis] * 45  # Increased from 35
-    embroidered_bgr += highlight_mask[:, :, np.newaxis] * 55     # Increased from 40
+    # VERY STRONG bevel
+    embroidered_bgr -= shadow_mask_edge[:, :, np.newaxis] * 60  # Increased
+    embroidered_bgr += highlight_mask[:, :, np.newaxis] * 70     # Increased
     embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
     
-    print(f"  Embroidery: ✓ Strong directional bevel (shadow=-45, highlight=+55)")
+    print(f"  Embroidery: ✓ Strong bevel (shadow=-60, highlight=+70)")
     
     # ==================================================================
-    # STEP 2: SHARP CRISP STITCHES (like SILK reference)
+    # STEP 4: SUPER DENSE STITCHES (filled appearance like SILK)
     # ==================================================================
     
-    # Generate THIN stitches with FIXED 2px spacing (always tight)
-    stitch_pattern = generate_simple_stitch_pattern(alpha, angle=45, spacing=2)
+    # Generate ULTRA-TIGHT stitches (1px spacing for filled look)
+    stitch_pattern = generate_simple_stitch_pattern(alpha, angle=45, spacing=1)
     
     embroidered_bgr = embroidered_bgr.astype(np.int16)
     
-    # STRONGER highlights on stitch lines for sparkle (+50 instead of +35)
-    embroidered_bgr[stitch_pattern > 0] += 50
+    # Strong highlights on stitches
+    embroidered_bgr[stitch_pattern > 0] += 60
     
     embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
     
-    print(f"  Embroidery: ✓ Sharp crisp stitches (highlight=+50)")
+    print(f"  Embroidery: ✓ Ultra-dense stitches (spacing=1px, highlight=+60)")
     
     # ==================================================================
-    # STEP 3: SUBTLE THREAD TEXTURE (NO BLUR - keep sharp)
+    # STEP 5: MINIMAL TEXTURE
     # ==================================================================
     
-    # Very subtle noise for thread texture (reduced for cleaner look)
     np.random.seed(42)
-    fiber_noise = np.random.randint(-3, 3, (h, w), dtype=np.int16)  # Reduced from ±5 to ±3
+    fiber_noise = np.random.randint(-2, 2, (h, w), dtype=np.int16)
     
-    # Apply only to stitch areas, NO BLUR
     stitch_mask = (stitch_pattern > 0)
     fiber_texture = fiber_noise * stitch_mask.astype(np.int16)
     
@@ -382,24 +405,23 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     embroidered_bgr += fiber_texture[:, :, np.newaxis]
     embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
     
-    print(f"  Embroidery: ✓ Minimal texture noise")
+    print(f"  Embroidery: ✓ Minimal texture")
     
     # ==================================================================
-    # STEP 4: SUBTLE SATURATION BOOST (preserve darkness)
+    # STEP 6: STRONG SATURATION BOOST (vibrant thread)
     # ==================================================================
     
-    # Convert to HSV and boost saturation for vibrant thread look
     embroidered_hsv = cv2.cvtColor(embroidered_bgr, cv2.COLOR_BGR2HSV)
     embroidered_hsv[:, :, 1] = np.clip(
-        embroidered_hsv[:, :, 1].astype(np.float32) * 1.15,  # Increased from 1.10
+        embroidered_hsv[:, :, 1].astype(np.float32) * 1.20,  # 20% boost
         0, 255
     ).astype(np.uint8)
     embroidered_bgr = cv2.cvtColor(embroidered_hsv, cv2.COLOR_HSV2BGR)
     
-    print(f"  Embroidery: ✓ Saturation boost (15%)")
+    print(f"  Embroidery: ✓ Strong saturation boost (20%)")
     
     # ==================================================================
-    # STEP 5: PROJECTED SHADOW MASK
+    # STEP 7: PROJECTED SHADOW MASK (for fabric darkening)
     # ==================================================================
     
     # Offset shadow (3px right, 4px down)
