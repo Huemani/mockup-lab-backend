@@ -293,13 +293,13 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     alpha = design_bgra[:, :, 3]
     design_bgr = design_bgra[:, :, :3].copy()
     
-    # Calculate scale-adaptive blur ONLY (spacing stays tight at 2px always)
+    # Calculate scale-adaptive blur - MORE CONSERVATIVE (sharper edges)
     scale_factor = w / 400.0
-    adaptive_blur = max(5, int(11 * scale_factor))
+    adaptive_blur = max(7, min(11, int(9 * scale_factor)))  # Tighter range: 7-11px
     if adaptive_blur % 2 == 0:
-        adaptive_blur += 1  # Must be odd for GaussianBlur
+        adaptive_blur += 1
     
-    print(f"  Embroidery: {w}x{h}, scale={scale_factor:.2f}, blur={adaptive_blur}px")
+    print(f"  Embroidery: {w}x{h}, scale={scale_factor:.2f}, blur={adaptive_blur}px (sharp)")
     
     # ==================================================================
     # STEP 1: DIRECTIONAL EDGE BEVEL (raised 3D appearance)
@@ -342,13 +342,13 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     if shadow_mask_edge.max() > 0:
         shadow_mask_edge = shadow_mask_edge / shadow_mask_edge.max()
     
-    # Apply bevel with SUBTLE strength to preserve original color
+    # Apply STRONGER bevel for pronounced 3D effect
     embroidered_bgr = design_bgr.copy().astype(np.float32)
-    embroidered_bgr -= shadow_mask_edge[:, :, np.newaxis] * 35
-    embroidered_bgr += highlight_mask[:, :, np.newaxis] * 40
+    embroidered_bgr -= shadow_mask_edge[:, :, np.newaxis] * 45  # Increased from 35
+    embroidered_bgr += highlight_mask[:, :, np.newaxis] * 55     # Increased from 40
     embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
     
-    print(f"  Embroidery: ✓ Smooth directional bevel")
+    print(f"  Embroidery: ✓ Strong directional bevel (shadow=-45, highlight=+55)")
     
     # ==================================================================
     # STEP 2: SHARP CRISP STITCHES (like SILK reference)
@@ -359,20 +359,20 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     
     embroidered_bgr = embroidered_bgr.astype(np.int16)
     
-    # REDUCED highlights on stitch lines to preserve color
-    embroidered_bgr[stitch_pattern > 0] += 35
+    # STRONGER highlights on stitch lines for sparkle (+50 instead of +35)
+    embroidered_bgr[stitch_pattern > 0] += 50
     
     embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
     
-    print(f"  Embroidery: ✓ Sharp crisp stitches")
+    print(f"  Embroidery: ✓ Sharp crisp stitches (highlight=+50)")
     
     # ==================================================================
     # STEP 3: SUBTLE THREAD TEXTURE (NO BLUR - keep sharp)
     # ==================================================================
     
-    # Very subtle noise for thread texture
+    # Very subtle noise for thread texture (reduced for cleaner look)
     np.random.seed(42)
-    fiber_noise = np.random.randint(-5, 5, (h, w), dtype=np.int16)
+    fiber_noise = np.random.randint(-3, 3, (h, w), dtype=np.int16)  # Reduced from ±5 to ±3
     
     # Apply only to stitch areas, NO BLUR
     stitch_mask = (stitch_pattern > 0)
@@ -382,21 +382,21 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     embroidered_bgr += fiber_texture[:, :, np.newaxis]
     embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
     
-    print(f"  Embroidery: ✓ Subtle sharp texture")
+    print(f"  Embroidery: ✓ Minimal texture noise")
     
     # ==================================================================
     # STEP 4: SUBTLE SATURATION BOOST (preserve darkness)
     # ==================================================================
     
-    # Convert to HSV and boost saturation SLIGHTLY
+    # Convert to HSV and boost saturation for vibrant thread look
     embroidered_hsv = cv2.cvtColor(embroidered_bgr, cv2.COLOR_BGR2HSV)
     embroidered_hsv[:, :, 1] = np.clip(
-        embroidered_hsv[:, :, 1].astype(np.float32) * 1.10,
+        embroidered_hsv[:, :, 1].astype(np.float32) * 1.15,  # Increased from 1.10
         0, 255
     ).astype(np.uint8)
     embroidered_bgr = cv2.cvtColor(embroidered_hsv, cv2.COLOR_HSV2BGR)
     
-    print(f"  Embroidery: ✓ Subtle saturation boost")
+    print(f"  Embroidery: ✓ Saturation boost (15%)")
     
     # ==================================================================
     # STEP 5: PROJECTED SHADOW MASK
