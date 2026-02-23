@@ -1011,8 +1011,8 @@ async def transform_garment(request: BrandColorTransformRequest):
         
         # Upload to Gemini
         print("  Uploading to Gemini Files API...")
-        base_file = gemini_client.files.upload(path=base_path)
-        reference_file = gemini_client.files.upload(path=reference_path)
+        base_file = gemini_client.files.upload(base_path)
+        reference_file = gemini_client.files.upload(reference_path)
         
         # Create transformation prompt
         prompt = f"""
@@ -1169,8 +1169,8 @@ async def gemini_swap_test(request: GeminiSwapRequest):
         print("→ Uploading to Gemini Files API...")
         
         # Upload files to Gemini
-        base_file = gemini_client.files.upload(path=base_path)
-        reference_file = gemini_client.files.upload(path=reference_path)
+        base_file = gemini_client.files.upload(base_path)
+        reference_file = gemini_client.files.upload(reference_path)
         
         print(f"  Base photo URI: {base_file.uri}")
         print(f"  Reference garment URI: {reference_file.uri}")
