@@ -903,6 +903,213 @@ async def get_color_reference(brand_id: str, product_id: str, color_id: str):
         )
 
 
+@app.post("/transform-garment")
+async def transform_garment(request: BrandColorTransformRequest):
+    """
+    Transform library photo to selected brand/product/color.
+    Uses caching to avoid re-running Gemini for same transformations.
+    """
+    try:
+        if not gemini_client:
+            raise HTTPException(
+                status_code=503,
+                detail="Gemini AI not configured. Set GOOGLE_API_KEY environment variable."
+            )
+        
+        # Validate inputs
+        if request.libraryPhotoId not in LIBRARY_PHOTOS:
+            raise HTTPException(status_code=404, detail="Library photo not found")
+        
+        if request.brandId not in BRAND_REFERENCES:
+            raise HTTPException(status_code=404, detail="Brand not found")
+        
+        brand = BRAND_REFERENCES[request.brandId]
+        if request.productId not in brand["products"]:
+            raise HTTPException(status_code=404, detail="Product not found")
+        
+        product = brand["products"][request.productId]
+        if request.colorId not in product["colors"]:
+            raise HTTPException(status_code=404, detail="Color not found")
+        
+        # Get URLs
+        base_photo_url = LIBRARY_PHOTOS[request.libraryPhotoId]["image_url"]
+        reference_url = product["colors"][request.colorId]
+        
+        # Generate cache key
+        cache_key = f"{request.libraryPhotoId}_{request.brandId}_{request.productId}_{request.colorId}"
+        cache_folder = "cache/garment-transforms"
+        
+        print(f"\n{'='*60}")
+        print("GARMENT TRANSFORMATION REQUEST")
+        print(f"{'='*60}")
+        print(f"  Library Photo: {request.libraryPhotoId}")
+        print(f"  Brand: {brand['name']}")
+        print(f"  Product: {product['name']}")
+        print(f"  Color: {request.colorId}")
+        print(f"  Cache Key: {cache_key}")
+        
+        # Check if cached version exists
+        print("\n→ Checking cache...")
+        try:
+            # Try to get cached image from Cloudinary
+            cached_url = f"https://res.cloudinary.com/ducsuev69/image/upload/v1/{cache_folder}/{cache_key}.png"
+            
+            # Quick check if exists (will throw if not found)
+            test_response = requests.head(cached_url, timeout=5)
+            if test_response.status_code == 200:
+                print(f"✓ Cache HIT! Using cached transformation")
+                print(f"  Cached URL: {cached_url}")
+                print(f"\n{'='*60}\n")
+                
+                return {
+                    "success": True,
+                    "result_url": cached_url,
+                    "cached": True,
+                    "cache_key": cache_key,
+                    "message": "Retrieved from cache"
+                }
+        except:
+            print("  Cache MISS - will generate new transformation")
+        
+        # Cache miss - run Gemini transformation
+        print("\n→ Running Gemini transformation...")
+        
+        # Download images
+        print("  Downloading base photo...")
+        base_response = requests.get(base_photo_url, timeout=30)
+        base_response.raise_for_status()
+        
+        print("  Downloading reference garment...")
+        reference_response = requests.get(reference_url, timeout=30)
+        reference_response.raise_for_status()
+        
+        # Save to temp files
+        import tempfile
+        import uuid
+        
+        temp_id = str(uuid.uuid4())
+        base_path = f"/tmp/base_{temp_id}.png"
+        reference_path = f"/tmp/reference_{temp_id}.png"
+        
+        with open(base_path, 'wb') as f:
+            f.write(base_response.content)
+        
+        with open(reference_path, 'wb') as f:
+            f.write(reference_response.content)
+        
+        # Upload to Gemini
+        print("  Uploading to Gemini Files API...")
+        base_file = gemini_client.files.upload(path=base_path)
+        reference_file = gemini_client.files.upload(path=reference_path)
+        
+        # Create transformation prompt
+        prompt = f"""
+        You are given TWO images:
+        1. MAIN IMAGE (first): A person wearing a white t-shirt
+        2. REFERENCE IMAGE (second): A {brand['name']} {product['name']} in {request.colorId.replace('_', ' ')} color
+        
+        TASK: Replace ONLY the t-shirt garment in the MAIN image to match the garment in the REFERENCE image.
+
+        CRITICAL REQUIREMENTS:
+        1. ONLY CHANGE: The t-shirt fabric color, texture, and material in the MAIN image
+        2. MATCH REFERENCE: Copy the exact fabric appearance (color, texture, material feel) from the REFERENCE image
+        3. PRESERVE EVERYTHING ELSE in the MAIN image:
+           - Keep the person's face, hair, skin tone IDENTICAL
+           - Keep the exact same pose and body position
+           - Keep all wrinkles and fabric folds in the same positions
+           - Keep the background completely unchanged
+           - Keep the lighting and shadows identical
+           - Keep any accessories (jewelry, etc.) unchanged
+        
+        4. TECHNICAL PRECISION:
+           - The t-shirt should look naturally worn on the person
+           - Maintain the exact same wrinkle patterns
+           - Preserve the fabric's drape and fit
+           - Keep the neckline, sleeves, and hem identical in shape
+        
+        DO NOT:
+        - Change the person's appearance in any way
+        - Alter the pose or body position
+        - Modify the background
+        - Add or remove any elements
+        - Change lighting or shadows
+        - Alter anything except the t-shirt's color and texture
+        
+        OUTPUT: Return the MAIN image with ONLY the t-shirt garment transformed to match the REFERENCE fabric.
+        """
+        
+        # Call Gemini
+        print("  Calling Gemini 2.0 Flash...")
+        response = gemini_client.models.generate_content(
+            model='gemini-2.0-flash-exp',
+            contents=[
+                types.Part.from_uri(file_uri=base_file.uri, mime_type=base_file.mime_type),
+                types.Part.from_uri(file_uri=reference_file.uri, mime_type=reference_file.mime_type),
+                prompt
+            ],
+            config=types.GenerateContentConfig(
+                temperature=0.3,
+                response_modalities=["IMAGE"]
+            )
+        )
+        
+        # Extract image
+        print("  Processing Gemini response...")
+        if not response.candidates or not response.candidates[0].content.parts:
+            raise HTTPException(status_code=500, detail="No image returned from Gemini")
+        
+        image_part = response.candidates[0].content.parts[0]
+        
+        if hasattr(image_part, 'inline_data'):
+            image_data = image_part.inline_data.data
+        elif hasattr(image_part, 'file_data'):
+            file_response = requests.get(image_part.file_data.file_uri)
+            image_data = file_response.content
+        else:
+            raise HTTPException(status_code=500, detail="Unexpected Gemini response format")
+        
+        # Upload to Cloudinary cache
+        print(f"\n→ Caching result to Cloudinary...")
+        print(f"  Cache folder: {cache_folder}")
+        print(f"  Cache key: {cache_key}")
+        
+        result = cloudinary.uploader.upload(
+            image_data,
+            folder=cache_folder,
+            public_id=cache_key,
+            resource_type="image",
+            overwrite=True  # Overwrite if exists
+        )
+        
+        result_url = result['secure_url']
+        print(f"✓ Cached: {result_url}")
+        
+        # Cleanup temp files
+        try:
+            os.remove(base_path)
+            os.remove(reference_path)
+        except:
+            pass
+        
+        print(f"\n{'='*60}")
+        print("TRANSFORMATION COMPLETE")
+        print(f"{'='*60}\n")
+        
+        return {
+            "success": True,
+            "result_url": result_url,
+            "cached": False,
+            "cache_key": cache_key,
+            "message": f"Transformed to {brand['name']} {product['name']} - {request.colorId.replace('_', ' ')}"
+        }
+        
+    except Exception as e:
+        print(f"\n❌ ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/gemini-swap-test")
 async def gemini_swap_test(request: GeminiSwapRequest):
     """
