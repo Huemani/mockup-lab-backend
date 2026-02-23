@@ -1101,53 +1101,17 @@ async def transform_garment(request: BrandColorTransformRequest):
         base_mime = 'image/png' if base_path.endswith('.png') else 'image/jpeg'
         reference_mime = 'image/webp' if reference_path.endswith('.webp') else ('image/png' if reference_path.endswith('.png') else 'image/jpeg')
         
-        # Create transformation prompt with emphasis on color accuracy
-        prompt = f"""
-        You are given TWO images:
-        1. MAIN IMAGE (first): A person wearing a white t-shirt
-        2. REFERENCE IMAGE (second): A {brand['name']} {product['name']} in {request.colorId.replace('_', ' ')} color
-        
-        CRITICAL TASK: Replace ONLY the t-shirt in the MAIN image to EXACTLY match the REFERENCE garment.
+        # Create SIMPLE, direct transformation prompt
+        color_name = request.colorId.replace('_', ' ').title()
+        prompt = f"""Change the t-shirt color in the first image to match the exact color of the t-shirt in the second image.
 
-        COLOR MATCHING (MOST IMPORTANT):
-        - Study the EXACT color tone in the REFERENCE image carefully
-        - The t-shirt in the MAIN image MUST match this EXACT color
-        - Pay attention to: hue, saturation, brightness, warmth/coolness
-        - If reference is dusty purple/mauve, result must be dusty purple/mauve
-        - If reference is garment-dyed (slightly uneven color), match that look
-        - DO NOT make the color darker, lighter, grayer, or different in any way
-        
-        TEXTURE MATCHING:
-        - Match the fabric texture from the REFERENCE (garment-dyed, soft, vintage look)
-        - Preserve any slight color variations that give it a lived-in feel
-        
-        PRESERVE IN MAIN IMAGE:
-        - Person's face, hair, skin tone: IDENTICAL
-        - Exact same pose and body position
-        - All wrinkles and fabric folds in same positions
-        - Background: completely unchanged
-        - Lighting and shadows: identical
-        - Accessories: unchanged
-        
-        TECHNICAL PRECISION:
-        - T-shirt looks naturally worn on the person
-        - Maintain exact wrinkle patterns
-        - Preserve fabric drape and fit
-        - Keep neckline, sleeves, hem identical in shape
-        
-        DO NOT:
-        - Change person's appearance
-        - Alter pose or body position
-        - Modify background
-        - Add/remove elements
-        - Change lighting
-        - Alter anything except t-shirt color and texture
-        
-        OUTPUT: Return MAIN image with t-shirt transformed to EXACTLY match REFERENCE color and texture.
-        """
+Keep everything else identical - same person, same pose, same background, same lighting.
+
+Only change the t-shirt color to match the {color_name} color shown in the reference image."""
         
         # Call Gemini Nano Banana (image editing specialist) - Billing enabled!
         print("  Calling Gemini Nano Banana (2.5 Flash Image)...")
+        print(f"  Prompt: {prompt[:100]}...")
         response = gemini_client.models.generate_content(
             model='models/gemini-2.5-flash-image',  # Nano Banana - BEST for selective editing!
             contents=[
@@ -1156,24 +1120,42 @@ async def transform_garment(request: BrandColorTransformRequest):
                 prompt
             ],
             config=types.GenerateContentConfig(
-                temperature=0.3,
+                temperature=0.7,  # Increased from 0.3 for more creativity
                 response_modalities=["IMAGE"]
             )
         )
         
         # Extract image
-        print("  Processing Gemini response...")
+        print("\n→ Processing Gemini response...")
+        print(f"  Has candidates: {bool(response.candidates)}")
+        
+        if response.candidates:
+            print(f"  Number of candidates: {len(response.candidates)}")
+            print(f"  Has parts: {bool(response.candidates[0].content.parts)}")
+            if response.candidates[0].content.parts:
+                print(f"  Number of parts: {len(response.candidates[0].content.parts)}")
+        
         if not response.candidates or not response.candidates[0].content.parts:
+            print(f"  ❌ ERROR: No image in response!")
+            print(f"  Full response: {response}")
             raise HTTPException(status_code=500, detail="No image returned from Gemini")
         
         image_part = response.candidates[0].content.parts[0]
+        print(f"  Part type: {type(image_part)}")
+        print(f"  Part has inline_data: {hasattr(image_part, 'inline_data')}")
+        print(f"  Part has file_data: {hasattr(image_part, 'file_data')}")
         
         if hasattr(image_part, 'inline_data'):
             image_data = image_part.inline_data.data
+            print(f"  ✓ Using inline_data: {len(image_data)} bytes")
         elif hasattr(image_part, 'file_data'):
+            print(f"  Fetching from URI: {image_part.file_data.file_uri}")
             file_response = requests.get(image_part.file_data.file_uri)
             image_data = file_response.content
+            print(f"  ✓ Downloaded file_data: {len(image_data)} bytes")
         else:
+            print(f"  ❌ ERROR: Unknown response format!")
+            print(f"  Available attributes: {[attr for attr in dir(image_part) if not attr.startswith('_')]}")
             raise HTTPException(status_code=500, detail="Unexpected Gemini response format")
         
         # Upload to Cloudinary cache
