@@ -1100,46 +1100,55 @@ async def transform_garment(request: BrandColorTransformRequest):
         base_mime = 'image/png' if base_path.endswith('.png') else 'image/jpeg'
         reference_mime = 'image/webp' if reference_path.endswith('.webp') else ('image/png' if reference_path.endswith('.png') else 'image/jpeg')
         
-        # Create transformation prompt
+        # Create transformation prompt with emphasis on color accuracy
         prompt = f"""
         You are given TWO images:
         1. MAIN IMAGE (first): A person wearing a white t-shirt
         2. REFERENCE IMAGE (second): A {brand['name']} {product['name']} in {request.colorId.replace('_', ' ')} color
         
-        TASK: Replace ONLY the t-shirt garment in the MAIN image to match the garment in the REFERENCE image.
+        CRITICAL TASK: Replace ONLY the t-shirt in the MAIN image to EXACTLY match the REFERENCE garment.
 
-        CRITICAL REQUIREMENTS:
-        1. ONLY CHANGE: The t-shirt fabric color, texture, and material in the MAIN image
-        2. MATCH REFERENCE: Copy the exact fabric appearance (color, texture, material feel) from the REFERENCE image
-        3. PRESERVE EVERYTHING ELSE in the MAIN image:
-           - Keep the person's face, hair, skin tone IDENTICAL
-           - Keep the exact same pose and body position
-           - Keep all wrinkles and fabric folds in the same positions
-           - Keep the background completely unchanged
-           - Keep the lighting and shadows identical
-           - Keep any accessories (jewelry, etc.) unchanged
+        COLOR MATCHING (MOST IMPORTANT):
+        - Study the EXACT color tone in the REFERENCE image carefully
+        - The t-shirt in the MAIN image MUST match this EXACT color
+        - Pay attention to: hue, saturation, brightness, warmth/coolness
+        - If reference is dusty purple/mauve, result must be dusty purple/mauve
+        - If reference is garment-dyed (slightly uneven color), match that look
+        - DO NOT make the color darker, lighter, grayer, or different in any way
         
-        4. TECHNICAL PRECISION:
-           - The t-shirt should look naturally worn on the person
-           - Maintain the exact same wrinkle patterns
-           - Preserve the fabric's drape and fit
-           - Keep the neckline, sleeves, and hem identical in shape
+        TEXTURE MATCHING:
+        - Match the fabric texture from the REFERENCE (garment-dyed, soft, vintage look)
+        - Preserve any slight color variations that give it a lived-in feel
+        
+        PRESERVE IN MAIN IMAGE:
+        - Person's face, hair, skin tone: IDENTICAL
+        - Exact same pose and body position
+        - All wrinkles and fabric folds in same positions
+        - Background: completely unchanged
+        - Lighting and shadows: identical
+        - Accessories: unchanged
+        
+        TECHNICAL PRECISION:
+        - T-shirt looks naturally worn on the person
+        - Maintain exact wrinkle patterns
+        - Preserve fabric drape and fit
+        - Keep neckline, sleeves, hem identical in shape
         
         DO NOT:
-        - Change the person's appearance in any way
-        - Alter the pose or body position
-        - Modify the background
-        - Add or remove any elements
-        - Change lighting or shadows
-        - Alter anything except the t-shirt's color and texture
+        - Change person's appearance
+        - Alter pose or body position
+        - Modify background
+        - Add/remove elements
+        - Change lighting
+        - Alter anything except t-shirt color and texture
         
-        OUTPUT: Return the MAIN image with ONLY the t-shirt garment transformed to match the REFERENCE fabric.
+        OUTPUT: Return MAIN image with t-shirt transformed to EXACTLY match REFERENCE color and texture.
         """
         
-        # Call Gemini Nano Banana (image editing specialist)
+        # Call Gemini Nano Banana (image editing specialist) - Billing enabled!
         print("  Calling Gemini Nano Banana (2.5 Flash Image)...")
         response = gemini_client.models.generate_content(
-            model='models/gemini-2.5-flash-image',  # Nano Banana - Image editing specialist!
+            model='models/gemini-2.5-flash-image',  # Nano Banana - BEST for selective editing!
             contents=[
                 types.Part.from_bytes(data=base_data, mime_type=base_mime),
                 types.Part.from_bytes(data=reference_data, mime_type=reference_mime),
@@ -1308,9 +1317,9 @@ async def gemini_swap_test(request: GeminiSwapRequest):
         print(f"  Model: gemini-2.0-flash-exp")
         
         # Call Gemini API - Order matters: base photo first, then reference
-        # Call Gemini Nano Banana (image editing specialist)
+        # Call Gemini Nano Banana (image editing specialist) - Billing enabled!
         response = gemini_client.models.generate_content(
-            model='models/gemini-2.5-flash-image',  # Nano Banana - Image editing specialist!
+            model='models/gemini-2.5-flash-image',  # Nano Banana - BEST for selective editing!
             contents=[
                 types.Part.from_bytes(data=base_data, mime_type=base_mime),
                 types.Part.from_bytes(data=reference_data, mime_type=reference_mime),
