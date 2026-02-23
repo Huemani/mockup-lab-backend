@@ -294,16 +294,10 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     design_bgr = design_bgra[:, :, :3].copy()
     
     # ==================================================================
-    # EMBROIDERY: Organic emboss + visible stitches + realistic shine
+    # EMBROIDERY: Realistic 3D thread structure with organic variation
     # ==================================================================
     
-    # Calculate scale-adaptive blur for consistent organic appearance
-    scale_factor = w / 400.0
-    adaptive_blur = max(11, min(21, int(17 * scale_factor)))
-    if adaptive_blur % 2 == 0:
-        adaptive_blur += 1
-    
-    print(f"  Embroidery: {w}x{h}, scale={scale_factor:.2f}, blur={adaptive_blur}px")
+    print(f"  Embroidery: {w}x{h} - realistic thread physics")
     
     _, binary = cv2.threshold(alpha, 1, 255, cv2.THRESH_BINARY)
     
@@ -311,20 +305,24 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     embroidered_bgr = design_bgr.copy().astype(np.float32)
     
     # ==================================================================
-    # STEP 1: SUBTLE EDGE
+    # STEP 1: ORGANIC EDGE VARIATION (thread penetration)
     # ==================================================================
     
     edge_kernel = np.ones((2, 2), np.uint8)
     dilated_edge = cv2.dilate(binary, edge_kernel, iterations=1)
     edge_line = cv2.subtract(dilated_edge, binary)
     
-    edge_mask = (edge_line > 0)
-    embroidered_bgr[edge_mask] *= 0.6
+    # Add slight organic variation to edge darkening
+    np.random.seed(42)
+    edge_variation = np.random.uniform(0.5, 0.7, (h, w))
     
-    print(f"  Embroidery: ✓ Subtle edge")
+    edge_mask = (edge_line > 0)
+    embroidered_bgr[edge_mask] *= edge_variation[edge_mask, np.newaxis]
+    
+    print(f"  Embroidery: ✓ Organic edge variation")
     
     # ==================================================================
-    # STEP 2: SMOOTH ORGANIC BEVEL (scale-adaptive)
+    # STEP 2: SMOOTH ORGANIC BEVEL (FIXED blur - no scale adaptation)
     # ==================================================================
     
     dist_transform = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
@@ -348,26 +346,44 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     highlight_mask = np.clip(light_facing, 0, None)
     shadow_mask_bevel = np.clip(-light_facing, 0, None)
     
-    # ADAPTIVE blur for organic smoothness regardless of scale
-    highlight_mask = cv2.GaussianBlur(highlight_mask, (adaptive_blur, adaptive_blur), 0)
-    shadow_mask_bevel = cv2.GaussianBlur(shadow_mask_bevel, (adaptive_blur, adaptive_blur), 0)
+    # FIXED blur size (17px) - consistent appearance regardless of scale
+    blur_size = 17
+    highlight_mask = cv2.GaussianBlur(highlight_mask, (blur_size, blur_size), 0)
+    shadow_mask_bevel = cv2.GaussianBlur(shadow_mask_bevel, (blur_size, blur_size), 0)
     
     if highlight_mask.max() > 0:
         highlight_mask = highlight_mask / highlight_mask.max()
     if shadow_mask_bevel.max() > 0:
         shadow_mask_bevel = shadow_mask_bevel / shadow_mask_bevel.max()
     
+    # Apply bevel (this will ALSO modulate stitches later)
     embroidered_bgr -= shadow_mask_bevel[:, :, np.newaxis] * 45
     embroidered_bgr += highlight_mask[:, :, np.newaxis] * 55
     
-    print(f"  Embroidery: ✓ Smooth organic bevel (adaptive blur={adaptive_blur}px)")
+    print(f"  Embroidery: ✓ Smooth bevel (FIXED blur={blur_size}px)")
     
     # ==================================================================
-    # STEP 3: VISIBLE STITCHES WITH REALISTIC SHINE SPOTS
+    # STEP 3: THREAD ARCS (3D stitch structure)
     # ==================================================================
     
     # Generate stitches with 2px spacing
     stitch_pattern = generate_simple_stitch_pattern(alpha, angle=45, spacing=2)
+    
+    # Simulate 3D arc structure along each stitch
+    # Thread is highest in middle, lower at ends
+    
+    # Create distance from stitch centers (brightest in middle)
+    stitch_dist = cv2.distanceTransform(
+        cv2.bitwise_not(stitch_pattern), 
+        cv2.DIST_L2, 
+        3
+    )
+    
+    # Normalize and invert (1.0 at stitch centers, 0.0 away)
+    if stitch_dist.max() > 0:
+        stitch_height = 1.0 - np.clip(stitch_dist / 2.0, 0, 1)
+    else:
+        stitch_height = np.zeros_like(stitch_dist)
     
     # Create valleys between stitches
     stitch_dilated = cv2.dilate(stitch_pattern, np.ones((2, 2), np.uint8), iterations=1)
@@ -379,30 +395,38 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     # DARKEN valleys
     embroidered_bgr[valleys_mask] *= 0.80
     
-    # BRIGHTEN stitch tops (base brightness)
+    # ==================================================================
+    # STEP 4: STITCH MODULATION BY EMBOSS (organic variation)
+    # ==================================================================
+    
+    # Stitches are MODULATED by the emboss lighting
+    # Stitches in highlights: extra bright
+    # Stitches in shadows: extra dark
+    
     stitch_mask = (stitch_pattern > 0)
-    embroidered_bgr[stitch_mask] *= 1.20
     
-    # ==================================================================
-    # STEP 3b: REALISTIC SHINE SPOTS (like SILK reference)
-    # ==================================================================
+    # Base stitch brightness
+    base_brightness = 1.20
     
-    # Create random bright spots on stitches (realistic thread reflection)
-    np.random.seed(42)  # Consistent shine pattern
+    # Modulate by emboss (stitches follow 3D surface lighting)
+    # highlight_mask: 0-1 (how much in light)
+    # shadow_mask_bevel: 0-1 (how much in shadow)
     
-    # Generate random shine mask (only ~15% of stitch pixels get shine)
-    shine_probability = np.random.random((h, w))
-    shine_spots = (shine_probability < 0.15) & stitch_mask
+    emboss_modulation = 1.0 + (highlight_mask * 0.3) - (shadow_mask_bevel * 0.3)
     
-    # Apply strong localized shine (like light catching thread)
-    embroidered_bgr[shine_spots] *= 1.4  # 40% brighter shine spots
+    # Apply modulated brightness to stitches
+    embroidered_bgr[stitch_mask] *= (base_brightness * emboss_modulation[stitch_mask, np.newaxis])
+    
+    # Also modulate by thread arc height (brightest in middle of each stitch)
+    arc_modulation = 1.0 + (stitch_height * 0.15)
+    embroidered_bgr[stitch_mask] *= arc_modulation[stitch_mask, np.newaxis]
     
     embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
     
-    print(f"  Embroidery: ✓ Visible stitches + realistic shine spots")
+    print(f"  Embroidery: ✓ Stitches modulated by emboss + arc structure")
     
     # ==================================================================
-    # STEP 4: MINIMAL TEXTURE
+    # STEP 5: MINIMAL TEXTURE
     # ==================================================================
     
     np.random.seed(42)
@@ -418,7 +442,7 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     print(f"  Embroidery: ✓ Minimal texture")
     
     # ==================================================================
-    # STEP 5: SUBTLE SATURATION BOOST
+    # STEP 6: SUBTLE SATURATION BOOST
     # ==================================================================
     
     embroidered_hsv = cv2.cvtColor(embroidered_bgr, cv2.COLOR_BGR2HSV)
@@ -431,7 +455,23 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     print(f"  Embroidery: ✓ Saturation boost (15%)")
     
     # ==================================================================
-    # STEP 6: NO PROJECTED SHADOW (sewn into fabric, not floating)
+    # STEP 7: SPECULAR HIGHLIGHTS (cylindrical thread sheen)
+    # ==================================================================
+    
+    # Threads are cylindrical - catch light where surface normal faces light
+    # Add subtle specular to stitch tops in highlight areas
+    
+    embroidered_bgr = embroidered_bgr.astype(np.float32)
+    
+    specular_zones = stitch_mask & (highlight_mask > 0.5)
+    embroidered_bgr[specular_zones] *= 1.25
+    
+    embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
+    
+    print(f"  Embroidery: ✓ Specular highlights")
+    
+    # ==================================================================
+    # STEP 8: NO PROJECTED SHADOW (sewn into fabric, not floating)
     # ==================================================================
     
     # Return empty shadow mask - embroidery is integrated, not floating
