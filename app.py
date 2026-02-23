@@ -1023,8 +1023,9 @@ async def transform_garment(request: BrandColorTransformRequest):
         base_photo_url = LIBRARY_PHOTOS[request.libraryPhotoId]["image_url"]
         reference_url = product["colors"][request.colorId]
         
-        # Generate cache key
-        cache_key = f"{request.libraryPhotoId}_{request.brandId}_{request.productId}_{request.colorId}"
+        # Generate cache key (include model name for version control)
+        model_name = 'nano-banana'  # Change this if switching models
+        cache_key = f"{request.libraryPhotoId}_{request.brandId}_{request.productId}_{request.colorId}_{model_name}"
         cache_folder = "cache/garment-transforms"
         
         print(f"\n{'='*60}")
