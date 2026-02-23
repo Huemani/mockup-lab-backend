@@ -840,6 +840,50 @@ async def root():
         "first_chars": os.getenv("GOOGLE_API_KEY", "")[:10] if os.getenv("GOOGLE_API_KEY") else "NOT SET"
     }
     
+    # Try to list available Gemini models
+    available_models = []
+    models_error = None
+    test_models = [
+        'gemini-1.5-flash',
+        'gemini-1.5-pro',
+        'gemini-2.0-flash-exp',
+        'gemini-exp-1206',
+        'models/gemini-1.5-flash',
+        'models/gemini-2.0-flash-exp'
+    ]
+    
+    try:
+        if gemini_client:
+            # Try listing (might not work)
+            try:
+                models = gemini_client.models.list()
+                for model in models:
+                    available_models.append({
+                        "name": model.name,
+                        "display_name": getattr(model, 'display_name', None)
+                    })
+            except:
+                available_models.append({"list_method": "failed"})
+            
+            # Test each model name individually
+            for model_name in test_models:
+                try:
+                    # Try to get model info
+                    model_info = gemini_client.models.get(model_name)
+                    available_models.append({
+                        "name": model_name,
+                        "status": "exists",
+                        "info": str(model_info) if model_info else None
+                    })
+                except Exception as e:
+                    available_models.append({
+                        "name": model_name,
+                        "status": "not_found",
+                        "error": str(e)[:100]
+                    })
+    except Exception as e:
+        models_error = str(e)
+    
     return {
         "message": "Mockup Lab API",
         "status": "running",
@@ -847,8 +891,40 @@ async def root():
         "gemini_configured": gemini_client is not None,
         "cloudinary_configured": bool(cloudinary.config().cloud_name),
         "debug_google_key": google_key_status,
+        "available_gemini_models": available_models,  # Always show, even if empty
+        "models_error": models_error,
         "all_env_keys": list(os.environ.keys())  # Show all env var names
     }
+
+
+@app.get("/debug/gemini-models")
+async def list_gemini_models():
+    """List available Gemini models"""
+    try:
+        if not gemini_client:
+            raise HTTPException(status_code=503, detail="Gemini not configured")
+        
+        # List all available models
+        models = gemini_client.models.list()
+        
+        model_list = []
+        for model in models:
+            model_list.append({
+                "name": model.name,
+                "display_name": model.display_name if hasattr(model, 'display_name') else None,
+                "supported_methods": model.supported_generation_methods if hasattr(model, 'supported_generation_methods') else None
+            })
+        
+        return {
+            "success": True,
+            "count": len(model_list),
+            "models": model_list
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 
 @app.get("/test-garments")
@@ -1061,9 +1137,9 @@ async def transform_garment(request: BrandColorTransformRequest):
         """
         
         # Call Gemini with inline data
-        print("  Calling Gemini 2.0 Flash...")
+        print("  Calling Gemini 1.5 Flash...")
         response = gemini_client.models.generate_content(
-            model='gemini-2.0-flash-exp-01-21',  # Correct model name
+            model='gemini-1.5-flash',  # Use stable 1.5 Flash model
             contents=[
                 types.Part.from_bytes(data=base_data, mime_type=base_mime),
                 types.Part.from_bytes(data=reference_data, mime_type=reference_mime),
@@ -1234,7 +1310,7 @@ async def gemini_swap_test(request: GeminiSwapRequest):
         # Call Gemini API - Order matters: base photo first, then reference
         # Call Gemini with inline data
         response = gemini_client.models.generate_content(
-            model='gemini-2.0-flash-exp-01-21',  # Correct model name
+            model='gemini-1.5-flash',  # Use stable 1.5 Flash model
             contents=[
                 types.Part.from_bytes(data=base_data, mime_type=base_mime),
                 types.Part.from_bytes(data=reference_data, mime_type=reference_mime),
