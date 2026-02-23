@@ -294,44 +294,31 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     design_bgr = design_bgra[:, :, :3].copy()
     
     # ==================================================================
-    # STEP 1: TIGHTER PROJECTED SHADOW (sits closer to design)
+    # EMBROIDERY: Keep original color + add 3D depth
     # ==================================================================
     
-    # Create shadow AROUND design edge - TIGHTER than before
+    print(f"  Embroidery: {w}x{h} - preserving original color")
+    
     _, binary = cv2.threshold(alpha, 1, 255, cv2.THRESH_BINARY)
     
-    # SMALLER dilate for tighter shadow
-    shadow_kernel = np.ones((5, 5), np.uint8)  # Was 8x8, now 5x5
-    shadow_area = cv2.dilate(binary, shadow_kernel, iterations=1)  # Was 2, now 1
-    shadow_ring = cv2.subtract(shadow_area, binary)
-    
-    # SHARPER blur for tighter shadow
-    shadow_ring_blur = cv2.GaussianBlur(shadow_ring.astype(np.float32), (9, 9), 0) / 255.0  # Was 15x15
-    
-    # Apply shadow to design (darkens area around edges)
+    # Start with ORIGINAL color (no brightening yet)
     embroidered_bgr = design_bgr.copy().astype(np.float32)
-    embroidered_bgr -= shadow_ring_blur[:, :, np.newaxis] * 40  # Reduced from 50
-    embroidered_bgr = np.clip(embroidered_bgr, 0, 255)
-    
-    print(f"  Embroidery: ✓ Tight projected shadow")
     
     # ==================================================================
-    # STEP 2: VERY DARK EDGE OUTLINE
+    # STEP 1: VERY DARK EDGE (thread edge definition)
     # ==================================================================
     
-    # Create very dark edge line
-    edge_kernel = np.ones((3, 3), np.uint8)
+    edge_kernel = np.ones((2, 2), np.uint8)
     dilated_edge = cv2.dilate(binary, edge_kernel, iterations=1)
     edge_line = cv2.subtract(dilated_edge, binary)
     
-    # Apply STRONGER darkening to edge
     edge_mask = (edge_line > 0)
-    embroidered_bgr[edge_mask] *= 0.3  # Was 0.4, now 0.3 (darker)
+    embroidered_bgr[edge_mask] *= 0.5  # Darken edge
     
-    print(f"  Embroidery: ✓ Very dark edge outline")
+    print(f"  Embroidery: ✓ Edge darkening")
     
     # ==================================================================
-    # STEP 3: DIRECTIONAL BEVEL
+    # STEP 2: DIRECTIONAL BEVEL (3D depth within original color)
     # ==================================================================
     
     dist_transform = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
@@ -339,73 +326,73 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     if dist_transform.max() > 0:
         dist_transform = dist_transform / dist_transform.max()
     
+    # Edge normals
     grad_x = -cv2.Sobel(dist_transform, cv2.CV_32F, 1, 0, ksize=5)
     grad_y = -cv2.Sobel(dist_transform, cv2.CV_32F, 0, 1, ksize=5)
     
-    edge_mask_bevel = (dist_transform > 0) & (dist_transform < 0.6)
+    edge_mask_bevel = (dist_transform > 0) & (dist_transform < 0.7)
     edge_mask_float = edge_mask_bevel.astype(np.float32)
     
     grad_magnitude = np.sqrt(grad_x**2 + grad_y**2) + 1e-6
     norm_grad_x = grad_x / grad_magnitude
     norm_grad_y = grad_y / grad_magnitude
     
+    # Light from top-right
     light_x, light_y = 0.707, -0.707
     light_facing = (norm_grad_x * light_x + norm_grad_y * light_y) * edge_mask_float
     
     highlight_mask = np.clip(light_facing, 0, None)
-    shadow_mask_edge = np.clip(-light_facing, 0, None)
+    shadow_mask_bevel = np.clip(-light_facing, 0, None)
     
+    # Moderate blur for smooth bevel
     highlight_mask = cv2.GaussianBlur(highlight_mask, (9, 9), 0)
-    shadow_mask_edge = cv2.GaussianBlur(shadow_mask_edge, (9, 9), 0)
+    shadow_mask_bevel = cv2.GaussianBlur(shadow_mask_bevel, (9, 9), 0)
     
     if highlight_mask.max() > 0:
         highlight_mask = highlight_mask / highlight_mask.max()
-    if shadow_mask_edge.max() > 0:
-        shadow_mask_edge = shadow_mask_edge / shadow_mask_edge.max()
+    if shadow_mask_bevel.max() > 0:
+        shadow_mask_bevel = shadow_mask_bevel / shadow_mask_bevel.max()
     
-    # VERY STRONG bevel
-    embroidered_bgr -= shadow_mask_edge[:, :, np.newaxis] * 60
-    embroidered_bgr += highlight_mask[:, :, np.newaxis] * 70
-    embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
+    # MODERATE bevel strength (works within original color range)
+    embroidered_bgr -= shadow_mask_bevel[:, :, np.newaxis] * 50
+    embroidered_bgr += highlight_mask[:, :, np.newaxis] * 60
     
-    print(f"  Embroidery: ✓ Strong bevel")
+    print(f"  Embroidery: ✓ Directional bevel")
     
     # ==================================================================
-    # STEP 4: ULTRA-DENSE STITCHES WITH SHADOWS BETWEEN
+    # STEP 3: ULTRA-DENSE STITCHES (preserve color, add texture)
     # ==================================================================
     
-    # Generate ULTRA-TIGHT stitches
+    # Generate ULTRA-TIGHT stitches (spacing=1px for nearly solid appearance)
     stitch_pattern = generate_simple_stitch_pattern(alpha, angle=45, spacing=1)
     
-    # CREATE SHADOW VALLEYS between stitches (like SILK reference)
-    # Dilate stitches slightly to find "between" areas
+    # Create valleys between stitches
     stitch_dilated = cv2.dilate(stitch_pattern, np.ones((2, 2), np.uint8), iterations=1)
-    
-    # Areas that are NOT stitches but ARE close to stitches = valleys
     valleys = cv2.subtract(stitch_dilated, stitch_pattern)
-    valleys_mask = (valleys > 0) & (alpha > 0)  # Only within design
+    valleys_mask = (valleys > 0) & (alpha > 0)
     
-    embroidered_bgr = embroidered_bgr.astype(np.int16)
+    embroidered_bgr = embroidered_bgr.astype(np.float32)
     
-    # DARKEN valleys between stitches (creates depth)
-    embroidered_bgr[valleys_mask] -= 30
+    # DARKEN valleys (creates thread depth) - WITHIN original color
+    embroidered_bgr[valleys_mask] *= 0.85  # Darken by 15%
     
-    # BRIGHTEN stitch tops (highlights)
-    embroidered_bgr[stitch_pattern > 0] += 60
+    # BRIGHTEN stitch tops slightly - WITHIN original color
+    stitch_mask = (stitch_pattern > 0)
+    embroidered_bgr[stitch_mask] *= 1.15  # Brighten by 15%
     
     embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
     
-    print(f"  Embroidery: ✓ Ultra-dense stitches with shadow valleys")
+    print(f"  Embroidery: ✓ Dense stitches with preserved color")
     
     # ==================================================================
-    # STEP 5: MINIMAL TEXTURE
+    # STEP 4: MINIMAL TEXTURE
     # ==================================================================
     
     np.random.seed(42)
     fiber_noise = np.random.randint(-2, 2, (h, w), dtype=np.int16)
     
-    stitch_mask = (stitch_pattern > 0)
-    fiber_texture = fiber_noise * stitch_mask.astype(np.int16)
+    stitch_mask_texture = (stitch_pattern > 0)
+    fiber_texture = fiber_noise * stitch_mask_texture.astype(np.int16)
     
     embroidered_bgr = embroidered_bgr.astype(np.int16)
     embroidered_bgr += fiber_texture[:, :, np.newaxis]
@@ -414,34 +401,26 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     print(f"  Embroidery: ✓ Minimal texture")
     
     # ==================================================================
-    # STEP 6: STRONG SATURATION BOOST (vibrant thread)
+    # STEP 5: SUBTLE SATURATION BOOST
     # ==================================================================
     
     embroidered_hsv = cv2.cvtColor(embroidered_bgr, cv2.COLOR_BGR2HSV)
     embroidered_hsv[:, :, 1] = np.clip(
-        embroidered_hsv[:, :, 1].astype(np.float32) * 1.20,  # 20% boost
+        embroidered_hsv[:, :, 1].astype(np.float32) * 1.15,
         0, 255
     ).astype(np.uint8)
     embroidered_bgr = cv2.cvtColor(embroidered_hsv, cv2.COLOR_HSV2BGR)
     
-    print(f"  Embroidery: ✓ Strong saturation boost (20%)")
+    print(f"  Embroidery: ✓ Saturation boost (15%)")
     
     # ==================================================================
-    # STEP 7: PROJECTED SHADOW MASK (for fabric darkening)
+    # STEP 6: NO PROJECTED SHADOW (sewn into fabric, not floating)
     # ==================================================================
     
-    # Offset shadow (3px right, 4px down)
-    shadow_projection = alpha.copy()
-    M_shadow = np.float32([[1, 0, 3], [0, 1, 4]])
-    shadow_projection = cv2.warpAffine(shadow_projection, M_shadow, (w, h))
+    # Return empty shadow mask - embroidery is integrated, not floating
+    shadow_projection = np.zeros((h, w), dtype=np.float32)
     
-    # Blur for soft shadow
-    shadow_projection = cv2.GaussianBlur(shadow_projection, (13, 13), 0).astype(np.float32) / 255.0
-    
-    # Don't shadow where design itself is
-    shadow_projection[alpha > 0] = 0
-    
-    print(f"  Embroidery: ✓ Projected shadow mask")
+    print(f"  Embroidery: ✓ No projected shadow (integrated into fabric)")
     
     # Combine with alpha
     embroidered = cv2.merge([
