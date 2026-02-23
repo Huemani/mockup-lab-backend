@@ -1063,7 +1063,7 @@ async def transform_garment(request: BrandColorTransformRequest):
         # Call Gemini with inline data
         print("  Calling Gemini 2.0 Flash...")
         response = gemini_client.models.generate_content(
-            model='gemini-2.0-flash-exp',
+            model='gemini-2.0-flash-exp-01-21',  # Correct model name
             contents=[
                 types.Part.from_bytes(data=base_data, mime_type=base_mime),
                 types.Part.from_bytes(data=reference_data, mime_type=reference_mime),
@@ -1234,7 +1234,7 @@ async def gemini_swap_test(request: GeminiSwapRequest):
         # Call Gemini API - Order matters: base photo first, then reference
         # Call Gemini with inline data
         response = gemini_client.models.generate_content(
-            model='gemini-2.0-flash-exp',
+            model='gemini-2.0-flash-exp-01-21',  # Correct model name
             contents=[
                 types.Part.from_bytes(data=base_data, mime_type=base_mime),
                 types.Part.from_bytes(data=reference_data, mime_type=reference_mime),
