@@ -1136,10 +1136,10 @@ async def transform_garment(request: BrandColorTransformRequest):
         OUTPUT: Return the MAIN image with ONLY the t-shirt garment transformed to match the REFERENCE fabric.
         """
         
-        # Call Gemini with inline data
-        print("  Calling Gemini 1.5 Flash...")
+        # Call Gemini Nano Banana (image editing specialist)
+        print("  Calling Gemini Nano Banana (2.5 Flash Image)...")
         response = gemini_client.models.generate_content(
-            model='gemini-1.5-flash',  # Use stable 1.5 Flash model
+            model='models/gemini-2.5-flash-image',  # Nano Banana - Image editing specialist!
             contents=[
                 types.Part.from_bytes(data=base_data, mime_type=base_mime),
                 types.Part.from_bytes(data=reference_data, mime_type=reference_mime),
@@ -1308,9 +1308,9 @@ async def gemini_swap_test(request: GeminiSwapRequest):
         print(f"  Model: gemini-2.0-flash-exp")
         
         # Call Gemini API - Order matters: base photo first, then reference
-        # Call Gemini with inline data
+        # Call Gemini Nano Banana (image editing specialist)
         response = gemini_client.models.generate_content(
-            model='gemini-1.5-flash',  # Use stable 1.5 Flash model
+            model='models/gemini-2.5-flash-image',  # Nano Banana - Image editing specialist!
             contents=[
                 types.Part.from_bytes(data=base_data, mime_type=base_mime),
                 types.Part.from_bytes(data=reference_data, mime_type=reference_mime),
