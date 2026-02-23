@@ -134,7 +134,8 @@ BRAND_REFERENCES = {
                 "colors": {
                     "white": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/gildan/5000/white.jpg",
                     "black": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/gildan/5000/black.jpg",
-                    "beige": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/gildan/5000/beige.jpg"
+                    "sport_grey": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/gildan/5000/sport-grey.jpg",
+                    "navy": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/gildan/5000/navy.jpg"
                 }
             },
             "18000": {
@@ -154,9 +155,73 @@ BRAND_REFERENCES = {
                 "name": "1717 Heavyweight Tee",
                 "type": "tshirt",
                 "colors": {
+                    "white": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/white.jpg",
+                    "black": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/black.jpg",
+                    "bay": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/bay.jpg",
+                    "berry": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/berry.jpg",
+                    "blossom": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/blossom.jpg",
+                    "blue_jean": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/blue-jean.jpg",
+                    "blue_spruce": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/blue-spruce.jpg",
+                    "brick": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/brick.jpg",
+                    "bright_orange": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/bright-orange.jpg",
+                    "bright_salmon": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/bright-salmon.jpg",
+                    "burnt_orange": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/burnt-orange.jpg",
+                    "butter": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/butter.jpg",
+                    "chalky_mint": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/chalky-mint.jpg",
+                    "chambray": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/chambray.jpg",
+                    "chili": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/chili.jpg",
+                    "china_blue": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/china-blue.jpg",
+                    "citrus": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/citrus.jpg",
+                    "crimson": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/crimson.jpg",
+                    "crunchberry": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/crunchberry.jpg",
+                    "denim": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/denim.jpg",
                     "dusk": "https://res.cloudinary.com/ducsuev69/image/upload/v1771880262/dusk_ysv40e.webp",
+                    "emerald": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/emerald.jpg",
+                    "espresso": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/espresso.jpg",
+                    "flo_blue": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/flo-blue.jpg",
+                    "granite": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/granite.jpg",
+                    "grape": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/grape.jpg",
+                    "graphite": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/graphite.jpg",
+                    "grey": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/grey.jpg",
+                    "hemp": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/hemp.jpg",
+                    "hydrangea": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/hydrangea.jpg",
+                    "ice_blue": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/ice-blue.jpg",
+                    "island_green": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/island-green.jpg",
+                    "island_reef": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/island-reef.jpg",
                     "ivory": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/ivory.jpg",
-                    "watermelon": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/watermelon.jpg"
+                    "khaki": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/khaki.jpg",
+                    "lagoon": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/lagoon.jpg",
+                    "light_green": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/light-green.jpg",
+                    "melon": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/melon.jpg",
+                    "midnight": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/midnight.jpg",
+                    "moss": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/moss.jpg",
+                    "mustard": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/mustard.jpg",
+                    "mystic_blue": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/mystic-blue.jpg",
+                    "navy": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/navy.jpg",
+                    "neon_cantaloupe": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/neon-cantaloupe.jpg",
+                    "neon_lemon": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/neon-lemon.jpg",
+                    "neon_pink": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/neon-pink.jpg",
+                    "neon_red_orange": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/neon-red-orange.jpg",
+                    "neon_violet": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/neon-violet.jpg",
+                    "orchid": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/orchid.jpg",
+                    "paprika": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/paprika.jpg",
+                    "peachy": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/peachy.jpg",
+                    "pepper": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/pepper.jpg",
+                    "periwinkle": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/periwinkle.jpg",
+                    "red": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/red.jpg",
+                    "rose_quartz": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/rose-quartz.jpg",
+                    "royal_caribe": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/royal-caribe.jpg",
+                    "sage": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/sage.jpg",
+                    "sandstone": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/sandstone.jpg",
+                    "sapphire": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/sapphire.jpg",
+                    "seafoam": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/seafoam.jpg",
+                    "terracotta": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/terracotta.jpg",
+                    "true_navy": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/true-navy.jpg",
+                    "violet": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/violet.jpg",
+                    "washed_denim": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/washed-denim.jpg",
+                    "watermelon": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/watermelon.jpg",
+                    "wine": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/wine.jpg",
+                    "yam": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/yam.jpg"
                 }
             }
         }
@@ -169,7 +234,9 @@ BRAND_REFERENCES = {
                 "type": "tshirt",
                 "colors": {
                     "white": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/bella-canvas/3001/white.jpg",
-                    "heather_grey": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/bella-canvas/3001/heather-grey.jpg"
+                    "black": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/bella-canvas/3001/black.jpg",
+                    "heather_grey": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/bella-canvas/3001/heather-grey.jpg",
+                    "navy": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/bella-canvas/3001/navy.jpg"
                 }
             }
         }
