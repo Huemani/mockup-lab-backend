@@ -96,25 +96,93 @@ class MockupRequest(BaseModel):
 
 # Gemini AI garment swap models
 class GeminiSwapRequest(BaseModel):
-    garmentUrl: str          # Base garment image URL
-    designUrl: str           # Design to place on garment
+    basePhotoUrl: str        # Library photo (person in white garment)
+    referenceGarmentUrl: str # Brand/color reference garment
     prompt: Optional[str] = None  # Optional custom prompt
 
-# TEST GARMENT DATA (will be replaced with database later)
-TEST_GARMENTS = {
-    "gildan_white_tshirt": {
-        "name": "Gildan Heavy Cotton Tee - White",
-        "supplier": "Gildan",
-        "sku": "G5000",
-        "color": "White",
-        "image_url": "https://res.cloudinary.com/ducsuev69/image/upload/v1/test-garments/white-tshirt.jpg",
-        "displacement_map_url": None  # Will generate on-the-fly
+# New: Brand/product/color transformation request
+class BrandColorTransformRequest(BaseModel):
+    libraryPhotoId: str      # ID from LIBRARY_PHOTOS
+    brandId: str             # ID from BRAND_REFERENCES (e.g., "gildan")
+    productId: str           # Product SKU (e.g., "5000")
+    colorId: str             # Color key from selected product
+    designUrl: str           # Design to place on transformed garment
+    method: str = "dtg"      # "dtg" or "embroidery"
+
+# TEST GARMENT DATA - Updated structure for AI transformation
+# Library: Base photos (white garments)
+# References: Brand/color combinations to transform into
+
+LIBRARY_PHOTOS = {
+    "photo_001": {
+        "name": "Casual T-Shirt Photo #1",
+        "type": "tshirt",
+        "base_color": "white",
+        "image_url": "https://res.cloudinary.com/ducsuev69/image/upload/v1/library/white-tshirts/photo-001.png",
+        "displacement_map_url": None
+    }
+}
+
+# Reference images for brand/product/color transformations
+BRAND_REFERENCES = {
+    "gildan": {
+        "name": "Gildan",
+        "products": {
+            "5000": {
+                "name": "5000 Heavy Cotton T-Shirt",
+                "type": "tshirt",
+                "colors": {
+                    "white": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/gildan/5000/white.jpg",
+                    "black": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/gildan/5000/black.jpg",
+                    "beige": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/gildan/5000/beige.jpg"
+                }
+            },
+            "18000": {
+                "name": "18000 Heavy Blend Crewneck Sweatshirt",
+                "type": "crewneck",
+                "colors": {
+                    "white": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/gildan/18000/white.jpg",
+                    "black": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/gildan/18000/black.jpg"
+                }
+            }
+        }
     },
-    "test_beige_hoodie": {
-        "name": "Test Beige Hoodie",
-        "supplier": "Test",
-        "color": "Beige",
-        "image_url": "https://res.cloudinary.com/ducsuev69/image/upload/v1/test-garments/beige-hoodie.jpg",
+    "comfort_colors": {
+        "name": "Comfort Colors",
+        "products": {
+            "1717": {
+                "name": "1717 Heavyweight Tee",
+                "type": "tshirt",
+                "colors": {
+                    "ivory": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/ivory.jpg",
+                    "watermelon": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/watermelon.jpg"
+                }
+            }
+        }
+    },
+    "bella_canvas": {
+        "name": "Bella+Canvas",
+        "products": {
+            "3001": {
+                "name": "3001 Unisex Jersey Short Sleeve Tee",
+                "type": "tshirt",
+                "colors": {
+                    "white": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/bella-canvas/3001/white.jpg",
+                    "heather_grey": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/bella-canvas/3001/heather-grey.jpg"
+                }
+            }
+        }
+    }
+}
+
+# For backwards compatibility with existing /test-garments endpoint
+TEST_GARMENTS = {
+    "white_tshirt_photo_001": {
+        "name": "White T-Shirt Photo #1",
+        "supplier": "Library",
+        "sku": "LIB-001",
+        "color": "White",
+        "image_url": "https://res.cloudinary.com/ducsuev69/image/upload/v1/library/white-tshirts/photo-001.png",
         "displacement_map_url": None
     }
 }
@@ -705,20 +773,38 @@ async def health_check():
 
 @app.get("/test-garments")
 async def get_test_garments():
-    """Get available test garments"""
+    """Get available test garments (backwards compatibility)"""
     return {
         "success": True,
         "garments": TEST_GARMENTS
     }
 
 
+@app.get("/library-photos")
+async def get_library_photos():
+    """Get available library photos (base images for transformation)"""
+    return {
+        "success": True,
+        "photos": LIBRARY_PHOTOS
+    }
+
+
+@app.get("/brand-references")
+async def get_brand_references():
+    """Get available brand/color references for transformation"""
+    return {
+        "success": True,
+        "brands": BRAND_REFERENCES
+    }
+
+
 @app.post("/gemini-swap-test")
 async def gemini_swap_test(request: GeminiSwapRequest):
     """
-    TEST ENDPOINT: Gemini AI garment swap
+    TEST ENDPOINT: Gemini AI garment transformation
     
-    Uses Google Gemini to intelligently place design on garment.
-    Only allowed for database garments (legal safety).
+    Transforms the garment in a library photo to match a reference brand/color.
+    ONLY changes the garment - preserves person, pose, background, lighting.
     """
     try:
         if not gemini_client:
@@ -728,77 +814,98 @@ async def gemini_swap_test(request: GeminiSwapRequest):
             )
         
         print(f"\n{'='*60}")
-        print("GEMINI AI GARMENT SWAP TEST")
+        print("GEMINI AI GARMENT TRANSFORMATION")
         print(f"{'='*60}")
-        print(f"  Garment URL: {request.garmentUrl}")
-        print(f"  Design URL:  {request.designUrl}")
+        print(f"  Base Photo URL:      {request.basePhotoUrl}")
+        print(f"  Reference Garment:   {request.referenceGarmentUrl}")
         
         # Download images
-        print("\n→ Downloading garment image...")
-        garment_response = requests.get(request.garmentUrl, timeout=30)
-        garment_response.raise_for_status()
+        print("\n→ Downloading base photo (library photo)...")
+        base_response = requests.get(request.basePhotoUrl, timeout=30)
+        base_response.raise_for_status()
         
-        print("→ Downloading design image...")
-        design_response = requests.get(request.designUrl, timeout=30)
-        design_response.raise_for_status()
+        print("→ Downloading reference garment (brand/color)...")
+        reference_response = requests.get(request.referenceGarmentUrl, timeout=30)
+        reference_response.raise_for_status()
         
         # Save to temp files for Gemini upload
         import tempfile
         import uuid
         
         temp_id = str(uuid.uuid4())
-        garment_path = f"/tmp/garment_{temp_id}.jpg"
-        design_path = f"/tmp/design_{temp_id}.png"
+        base_path = f"/tmp/base_{temp_id}.png"
+        reference_path = f"/tmp/reference_{temp_id}.jpg"
         
-        with open(garment_path, 'wb') as f:
-            f.write(garment_response.content)
+        with open(base_path, 'wb') as f:
+            f.write(base_response.content)
         
-        with open(design_path, 'wb') as f:
-            f.write(design_response.content)
+        with open(reference_path, 'wb') as f:
+            f.write(reference_response.content)
         
         print("→ Uploading to Gemini Files API...")
         
         # Upload files to Gemini
-        garment_file = gemini_client.files.upload(path=garment_path)
-        design_file = gemini_client.files.upload(path=design_path)
+        base_file = gemini_client.files.upload(path=base_path)
+        reference_file = gemini_client.files.upload(path=reference_path)
         
-        print(f"  Garment file URI: {garment_file.uri}")
-        print(f"  Design file URI: {design_file.uri}")
+        print(f"  Base photo URI: {base_file.uri}")
+        print(f"  Reference garment URI: {reference_file.uri}")
         
-        # Create prompt
+        # Create prompt for PRECISE garment-only transformation
         prompt = request.prompt or """
-        Edit this garment image by placing the uploaded design on the front center of the garment.
+        You are given TWO images:
+        1. MAIN IMAGE (first): A person wearing a white t-shirt
+        2. REFERENCE IMAGE (second): A garment showing the target fabric/color
         
-        Requirements:
-        - Place design on the chest/front center area
-        - Ensure design follows the fabric's texture and wrinkles naturally
-        - Maintain realistic lighting and shadows
-        - Keep garment color and fabric unchanged
-        - Design should look like it's printed/embroidered on the fabric
-        - Preserve everything else in the image
+        TASK: Replace ONLY the t-shirt garment in the MAIN image to match the garment in the REFERENCE image.
+
+        CRITICAL REQUIREMENTS:
+        1. ONLY CHANGE: The t-shirt fabric color, texture, and material in the MAIN image
+        2. MATCH REFERENCE: Copy the exact fabric appearance (color, texture, material feel) from the REFERENCE image
+        3. PRESERVE EVERYTHING ELSE in the MAIN image:
+           - Keep the person's face, hair, skin tone IDENTICAL
+           - Keep the exact same pose and body position
+           - Keep all wrinkles and fabric folds in the same positions
+           - Keep the background completely unchanged
+           - Keep the lighting and shadows identical
+           - Keep any accessories (jewelry, etc.) unchanged
         
-        Return only the edited image with the design placed naturally on the garment.
+        4. TECHNICAL PRECISION:
+           - The t-shirt should look naturally worn on the person
+           - Maintain the exact same wrinkle patterns
+           - Preserve the fabric's drape and fit
+           - Keep the neckline, sleeves, and hem identical in shape
+        
+        DO NOT:
+        - Change the person's appearance in any way
+        - Alter the pose or body position
+        - Modify the background
+        - Add or remove any elements
+        - Change lighting or shadows
+        - Alter anything except the t-shirt's color and texture
+        
+        OUTPUT: Return the MAIN image with ONLY the t-shirt garment transformed to match the REFERENCE fabric.
         """
         
-        print("\n→ Calling Gemini image editing...")
+        print("\n→ Calling Gemini for garment transformation...")
         print(f"  Model: gemini-2.0-flash-exp")
         
-        # Call Gemini API
+        # Call Gemini API - Order matters: base photo first, then reference
         response = gemini_client.models.generate_content(
             model='gemini-2.0-flash-exp',
             contents=[
                 types.Part.from_uri(
-                    file_uri=garment_file.uri,
-                    mime_type=garment_file.mime_type
+                    file_uri=base_file.uri,
+                    mime_type=base_file.mime_type
                 ),
                 types.Part.from_uri(
-                    file_uri=design_file.uri,
-                    mime_type=design_file.mime_type
+                    file_uri=reference_file.uri,
+                    mime_type=reference_file.mime_type
                 ),
                 prompt
             ],
             config=types.GenerateContentConfig(
-                temperature=0.4,  # Lower for consistency
+                temperature=0.3,  # Low for consistency and precision
                 response_modalities=["IMAGE"]
             )
         )
@@ -835,7 +942,7 @@ async def gemini_swap_test(request: GeminiSwapRequest):
         
         result = cloudinary.uploader.upload(
             image_data,
-            folder="mockups/gemini-test",
+            folder="mockups/ai-generated",
             resource_type="image"
         )
         
@@ -844,20 +951,20 @@ async def gemini_swap_test(request: GeminiSwapRequest):
         
         # Cleanup temp files
         try:
-            os.remove(garment_path)
-            os.remove(design_path)
+            os.remove(base_path)
+            os.remove(reference_path)
         except:
             pass
         
         print(f"\n{'='*60}")
-        print("GEMINI SWAP COMPLETE")
+        print("GEMINI GARMENT TRANSFORMATION COMPLETE")
         print(f"{'='*60}\n")
         
         return {
             "success": True,
             "result_url": result_url,
             "gemini_used": True,
-            "message": "Garment swap completed successfully"
+            "message": "Garment transformation completed successfully"
         }
         
     except requests.exceptions.RequestException as e:
@@ -1071,7 +1178,7 @@ async def generate_mockup(request: MockupRequest):
 
         upload_result = cloudinary.uploader.upload(
             buffer,
-            folder="mockup-lab",
+            folder="mockups/user-uploads",
             resource_type="image"
         )
 
