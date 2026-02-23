@@ -118,7 +118,7 @@ LIBRARY_PHOTOS = {
         "name": "Casual T-Shirt Photo #1",
         "type": "tshirt",
         "base_color": "white",
-        "image_url": "https://res.cloudinary.com/ducsuev69/image/upload/v1/library/white-tshirts/photo-001.png",
+        "image_url": "https://res.cloudinary.com/ducsuev69/image/upload/v1771879971/photo-001_bfwkdi.png",
         "displacement_map_url": None
     }
 }
@@ -154,6 +154,7 @@ BRAND_REFERENCES = {
                 "name": "1717 Heavyweight Tee",
                 "type": "tshirt",
                 "colors": {
+                    "dusk": "https://res.cloudinary.com/ducsuev69/image/upload/v1771880262/dusk_ysv40e.webp",
                     "ivory": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/ivory.jpg",
                     "watermelon": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/watermelon.jpg"
                 }
@@ -182,7 +183,7 @@ TEST_GARMENTS = {
         "supplier": "Library",
         "sku": "LIB-001",
         "color": "White",
-        "image_url": "https://res.cloudinary.com/ducsuev69/image/upload/v1/library/white-tshirts/photo-001.png",
+        "image_url": "https://res.cloudinary.com/ducsuev69/image/upload/v1771879971/photo-001_bfwkdi.png",
         "displacement_map_url": None
     }
 }
