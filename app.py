@@ -1009,10 +1009,20 @@ async def transform_garment(request: BrandColorTransformRequest):
         with open(reference_path, 'wb') as f:
             f.write(reference_response.content)
         
-        # Upload to Gemini
-        print("  Uploading to Gemini Files API...")
-        base_file = genai.upload_file(path=base_path)
-        reference_file = genai.upload_file(path=reference_path)
+        # Read images as bytes for inline data
+        print("  Reading images...")
+        with open(base_path, 'rb') as f:
+            base_data = f.read()
+        
+        with open(reference_path, 'rb') as f:
+            reference_data = f.read()
+        
+        print(f"  Base image size: {len(base_data)} bytes")
+        print(f"  Reference image size: {len(reference_data)} bytes")
+        
+        # Determine mime types
+        base_mime = 'image/png' if base_path.endswith('.png') else 'image/jpeg'
+        reference_mime = 'image/webp' if reference_path.endswith('.webp') else ('image/png' if reference_path.endswith('.png') else 'image/jpeg')
         
         # Create transformation prompt
         prompt = f"""
@@ -1050,13 +1060,13 @@ async def transform_garment(request: BrandColorTransformRequest):
         OUTPUT: Return the MAIN image with ONLY the t-shirt garment transformed to match the REFERENCE fabric.
         """
         
-        # Call Gemini
+        # Call Gemini with inline data
         print("  Calling Gemini 2.0 Flash...")
         response = gemini_client.models.generate_content(
             model='gemini-2.0-flash-exp',
             contents=[
-                types.Part.from_uri(file_uri=base_file.uri, mime_type=base_file.mime_type),
-                types.Part.from_uri(file_uri=reference_file.uri, mime_type=reference_file.mime_type),
+                types.Part.from_bytes(data=base_data, mime_type=base_mime),
+                types.Part.from_bytes(data=reference_data, mime_type=reference_mime),
                 prompt
             ],
             config=types.GenerateContentConfig(
@@ -1166,14 +1176,21 @@ async def gemini_swap_test(request: GeminiSwapRequest):
         with open(reference_path, 'wb') as f:
             f.write(reference_response.content)
         
-        print("→ Uploading to Gemini Files API...")
+        print("→ Reading images...")
         
-        # Upload files to Gemini
-        base_file = genai.upload_file(path=base_path)
-        reference_file = genai.upload_file(path=reference_path)
+        # Read images as bytes for inline data
+        with open(base_path, 'rb') as f:
+            base_data = f.read()
         
-        print(f"  Base photo URI: {base_file.uri}")
-        print(f"  Reference garment URI: {reference_file.uri}")
+        with open(reference_path, 'rb') as f:
+            reference_data = f.read()
+        
+        print(f"  Base image size: {len(base_data)} bytes")
+        print(f"  Reference image size: {len(reference_data)} bytes")
+        
+        # Determine mime types
+        base_mime = 'image/png' if base_path.endswith('.png') else 'image/jpeg'
+        reference_mime = 'image/webp' if reference_path.endswith('.webp') else ('image/png' if reference_path.endswith('.png') else 'image/jpeg')
         
         # Create prompt for PRECISE garment-only transformation
         prompt = request.prompt or """
@@ -1215,17 +1232,12 @@ async def gemini_swap_test(request: GeminiSwapRequest):
         print(f"  Model: gemini-2.0-flash-exp")
         
         # Call Gemini API - Order matters: base photo first, then reference
+        # Call Gemini with inline data
         response = gemini_client.models.generate_content(
             model='gemini-2.0-flash-exp',
             contents=[
-                types.Part.from_uri(
-                    file_uri=base_file.uri,
-                    mime_type=base_file.mime_type
-                ),
-                types.Part.from_uri(
-                    file_uri=reference_file.uri,
-                    mime_type=reference_file.mime_type
-                ),
+                types.Part.from_bytes(data=base_data, mime_type=base_mime),
+                types.Part.from_bytes(data=reference_data, mime_type=reference_mime),
                 prompt
             ],
             config=types.GenerateContentConfig(
