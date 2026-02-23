@@ -859,11 +859,48 @@ async def get_library_photos():
 
 @app.get("/brand-references")
 async def get_brand_references():
-    """Get available brand/color references for transformation"""
+    """Get available brand/color references for transformation (optimized - color names only)"""
+    
+    # Optimize response by only sending color names, not URLs
+    # URLs are only needed when actually transforming, not for UI display
+    optimized_brands = {}
+    
+    for brand_id, brand_data in BRAND_REFERENCES.items():
+        optimized_brands[brand_id] = {
+            "name": brand_data["name"],
+            "products": {}
+        }
+        
+        for product_id, product_data in brand_data["products"].items():
+            optimized_brands[brand_id]["products"][product_id] = {
+                "name": product_data["name"],
+                "type": product_data["type"],
+                "colors": list(product_data["colors"].keys())  # Just color names, not URLs
+            }
+    
     return {
         "success": True,
-        "brands": BRAND_REFERENCES
+        "brands": optimized_brands
     }
+
+
+@app.get("/get-color-reference/{brand_id}/{product_id}/{color_id}")
+async def get_color_reference(brand_id: str, product_id: str, color_id: str):
+    """Get the reference image URL for a specific brand/product/color combination"""
+    try:
+        url = BRAND_REFERENCES[brand_id]["products"][product_id]["colors"][color_id]
+        return {
+            "success": True,
+            "url": url,
+            "brand": BRAND_REFERENCES[brand_id]["name"],
+            "product": BRAND_REFERENCES[brand_id]["products"][product_id]["name"],
+            "color": color_id
+        }
+    except KeyError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Color reference not found: {brand_id}/{product_id}/{color_id}"
+        )
 
 
 @app.post("/gemini-swap-test")
