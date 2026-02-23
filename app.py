@@ -807,17 +807,6 @@ def alpha_composite_design(tshirt_bgr, warped_design_bgra, tshirt_bgr_original, 
     return result
 
 
-@app.get("/")
-async def root():
-    return {
-        "message": "Mockup Lab API",
-        "status": "running",
-        "version": "3.0.0",
-        "endpoints": ["/health", "/generate-mockup", "/docs"],
-        "accepts": "JSON with Cloudinary URLs (frontend contract)"
-    }
-
-
 @app.get("/health")
 async def health_check():
     cloudinary_configured = bool(
@@ -838,6 +827,29 @@ async def health_check():
 # ============================================================================
 # GEMINI AI GARMENT SWAP ENDPOINT (TEST)
 # ============================================================================
+
+@app.get("/")
+async def root():
+    """Root endpoint with API information and health check"""
+    import os
+    
+    # Debug: Show if GOOGLE_API_KEY is in environment
+    google_key_status = {
+        "exists_in_env": "GOOGLE_API_KEY" in os.environ,
+        "value_length": len(os.getenv("GOOGLE_API_KEY", "")) if os.getenv("GOOGLE_API_KEY") else 0,
+        "first_chars": os.getenv("GOOGLE_API_KEY", "")[:10] if os.getenv("GOOGLE_API_KEY") else "NOT SET"
+    }
+    
+    return {
+        "message": "Mockup Lab API",
+        "status": "running",
+        "version": "1.0.0",
+        "gemini_configured": gemini_client is not None,
+        "cloudinary_configured": bool(cloudinary.config().cloud_name),
+        "debug_google_key": google_key_status,
+        "all_env_keys": list(os.environ.keys())  # Show all env var names
+    }
+
 
 @app.get("/test-garments")
 async def get_test_garments():
