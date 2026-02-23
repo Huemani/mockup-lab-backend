@@ -294,18 +294,18 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     design_bgr = design_bgra[:, :, :3].copy()
     
     # ==================================================================
-    # EMBROIDERY: Keep original color + add 3D depth
+    # EMBROIDERY: Organic emboss + visible stitches
     # ==================================================================
     
-    print(f"  Embroidery: {w}x{h} - preserving original color")
+    print(f"  Embroidery: {w}x{h} - organic smooth appearance")
     
     _, binary = cv2.threshold(alpha, 1, 255, cv2.THRESH_BINARY)
     
-    # Start with ORIGINAL color (no brightening yet)
+    # Start with ORIGINAL color
     embroidered_bgr = design_bgr.copy().astype(np.float32)
     
     # ==================================================================
-    # STEP 1: VERY DARK EDGE (thread edge definition)
+    # STEP 1: DARK EDGE (subtle definition)
     # ==================================================================
     
     edge_kernel = np.ones((2, 2), np.uint8)
@@ -313,12 +313,12 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     edge_line = cv2.subtract(dilated_edge, binary)
     
     edge_mask = (edge_line > 0)
-    embroidered_bgr[edge_mask] *= 0.5  # Darken edge
+    embroidered_bgr[edge_mask] *= 0.6  # Subtle edge darkening
     
-    print(f"  Embroidery: ✓ Edge darkening")
+    print(f"  Embroidery: ✓ Subtle edge")
     
     # ==================================================================
-    # STEP 2: DIRECTIONAL BEVEL (3D depth within original color)
+    # STEP 2: SMOOTH ORGANIC BEVEL (like SILK - rounded/puffy)
     # ==================================================================
     
     dist_transform = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
@@ -330,7 +330,8 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     grad_x = -cv2.Sobel(dist_transform, cv2.CV_32F, 1, 0, ksize=5)
     grad_y = -cv2.Sobel(dist_transform, cv2.CV_32F, 0, 1, ksize=5)
     
-    edge_mask_bevel = (dist_transform > 0) & (dist_transform < 0.7)
+    # WIDER edge mask for smoother, more organic gradient
+    edge_mask_bevel = (dist_transform > 0) & (dist_transform < 0.8)  # Was 0.7, now 0.8
     edge_mask_float = edge_mask_bevel.astype(np.float32)
     
     grad_magnitude = np.sqrt(grad_x**2 + grad_y**2) + 1e-6
@@ -344,27 +345,28 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     highlight_mask = np.clip(light_facing, 0, None)
     shadow_mask_bevel = np.clip(-light_facing, 0, None)
     
-    # Moderate blur for smooth bevel
-    highlight_mask = cv2.GaussianBlur(highlight_mask, (9, 9), 0)
-    shadow_mask_bevel = cv2.GaussianBlur(shadow_mask_bevel, (9, 9), 0)
+    # MUCH LARGER blur for smooth, organic, rounded appearance (like SILK)
+    blur_size = 17  # Was 9, now 17 for organic smoothness
+    highlight_mask = cv2.GaussianBlur(highlight_mask, (blur_size, blur_size), 0)
+    shadow_mask_bevel = cv2.GaussianBlur(shadow_mask_bevel, (blur_size, blur_size), 0)
     
     if highlight_mask.max() > 0:
         highlight_mask = highlight_mask / highlight_mask.max()
     if shadow_mask_bevel.max() > 0:
         shadow_mask_bevel = shadow_mask_bevel / shadow_mask_bevel.max()
     
-    # MODERATE bevel strength (works within original color range)
-    embroidered_bgr -= shadow_mask_bevel[:, :, np.newaxis] * 50
-    embroidered_bgr += highlight_mask[:, :, np.newaxis] * 60
+    # Moderate bevel strength (works within original color range)
+    embroidered_bgr -= shadow_mask_bevel[:, :, np.newaxis] * 45  # Reduced from 50
+    embroidered_bgr += highlight_mask[:, :, np.newaxis] * 55     # Reduced from 60
     
-    print(f"  Embroidery: ✓ Directional bevel")
+    print(f"  Embroidery: ✓ Smooth organic bevel (blur={blur_size}px)")
     
     # ==================================================================
-    # STEP 3: ULTRA-DENSE STITCHES (preserve color, add texture)
+    # STEP 3: VISIBLE STITCHES (spacing=2px for clarity)
     # ==================================================================
     
-    # Generate ULTRA-TIGHT stitches (spacing=1px for nearly solid appearance)
-    stitch_pattern = generate_simple_stitch_pattern(alpha, angle=45, spacing=1)
+    # Generate stitches with 2px spacing for VISIBLE individual lines
+    stitch_pattern = generate_simple_stitch_pattern(alpha, angle=45, spacing=2)  # Was 1, now 2
     
     # Create valleys between stitches
     stitch_dilated = cv2.dilate(stitch_pattern, np.ones((2, 2), np.uint8), iterations=1)
@@ -373,16 +375,16 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     
     embroidered_bgr = embroidered_bgr.astype(np.float32)
     
-    # DARKEN valleys (creates thread depth) - WITHIN original color
-    embroidered_bgr[valleys_mask] *= 0.85  # Darken by 15%
+    # DARKEN valleys (creates thread depth)
+    embroidered_bgr[valleys_mask] *= 0.80  # Increased from 0.85 for more contrast
     
-    # BRIGHTEN stitch tops slightly - WITHIN original color
+    # BRIGHTEN stitch tops
     stitch_mask = (stitch_pattern > 0)
-    embroidered_bgr[stitch_mask] *= 1.15  # Brighten by 15%
+    embroidered_bgr[stitch_mask] *= 1.20  # Increased from 1.15 for more visibility
     
     embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
     
-    print(f"  Embroidery: ✓ Dense stitches with preserved color")
+    print(f"  Embroidery: ✓ Visible stitches (spacing=2px)")
     
     # ==================================================================
     # STEP 4: MINIMAL TEXTURE
