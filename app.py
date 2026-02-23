@@ -245,7 +245,7 @@ BRAND_REFERENCES = {
 
 # For backwards compatibility with existing /test-garments endpoint
 TEST_GARMENTS = {
-    "white_tshirt_photo_001": {
+    "photo_001": {  # ← Changed to match LIBRARY_PHOTOS ID
         "name": "White T-Shirt Photo #1",
         "supplier": "Library",
         "sku": "LIB-001",
