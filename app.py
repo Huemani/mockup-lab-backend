@@ -294,44 +294,44 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     design_bgr = design_bgra[:, :, :3].copy()
     
     # ==================================================================
-    # STEP 1: PROJECTED SHADOW AROUND DESIGN (like SILK reference)
+    # STEP 1: TIGHTER PROJECTED SHADOW (sits closer to design)
     # ==================================================================
     
-    # Create strong shadow AROUND entire design edge
+    # Create shadow AROUND design edge - TIGHTER than before
     _, binary = cv2.threshold(alpha, 1, 255, cv2.THRESH_BINARY)
     
-    # Dilate to create shadow zone around design
-    shadow_kernel = np.ones((8, 8), np.uint8)
-    shadow_area = cv2.dilate(binary, shadow_kernel, iterations=2)
+    # SMALLER dilate for tighter shadow
+    shadow_kernel = np.ones((5, 5), np.uint8)  # Was 8x8, now 5x5
+    shadow_area = cv2.dilate(binary, shadow_kernel, iterations=1)  # Was 2, now 1
     shadow_ring = cv2.subtract(shadow_area, binary)
     
-    # Blur shadow for soft falloff
-    shadow_ring_blur = cv2.GaussianBlur(shadow_ring.astype(np.float32), (15, 15), 0) / 255.0
+    # SHARPER blur for tighter shadow
+    shadow_ring_blur = cv2.GaussianBlur(shadow_ring.astype(np.float32), (9, 9), 0) / 255.0  # Was 15x15
     
     # Apply shadow to design (darkens area around edges)
     embroidered_bgr = design_bgr.copy().astype(np.float32)
-    embroidered_bgr -= shadow_ring_blur[:, :, np.newaxis] * 50  # Strong shadow around edges
+    embroidered_bgr -= shadow_ring_blur[:, :, np.newaxis] * 40  # Reduced from 50
     embroidered_bgr = np.clip(embroidered_bgr, 0, 255)
     
-    print(f"  Embroidery: ✓ Projected shadow around design")
+    print(f"  Embroidery: ✓ Tight projected shadow")
     
     # ==================================================================
-    # STEP 2: DARK EDGE OUTLINE (separation from fabric)
+    # STEP 2: VERY DARK EDGE OUTLINE
     # ==================================================================
     
-    # Create very dark edge line (like cliff edge where thread meets fabric)
+    # Create very dark edge line
     edge_kernel = np.ones((3, 3), np.uint8)
     dilated_edge = cv2.dilate(binary, edge_kernel, iterations=1)
     edge_line = cv2.subtract(dilated_edge, binary)
     
-    # Apply strong darkening to edge
+    # Apply STRONGER darkening to edge
     edge_mask = (edge_line > 0)
-    embroidered_bgr[edge_mask] *= 0.4  # Darken by 60%
+    embroidered_bgr[edge_mask] *= 0.3  # Was 0.4, now 0.3 (darker)
     
-    print(f"  Embroidery: ✓ Dark edge outline")
+    print(f"  Embroidery: ✓ Very dark edge outline")
     
     # ==================================================================
-    # STEP 3: DIRECTIONAL BEVEL (raised appearance)
+    # STEP 3: DIRECTIONAL BEVEL
     # ==================================================================
     
     dist_transform = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
@@ -339,27 +339,22 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
     if dist_transform.max() > 0:
         dist_transform = dist_transform / dist_transform.max()
     
-    # OUTWARD-facing edge normals
     grad_x = -cv2.Sobel(dist_transform, cv2.CV_32F, 1, 0, ksize=5)
     grad_y = -cv2.Sobel(dist_transform, cv2.CV_32F, 0, 1, ksize=5)
     
-    # Wider edge mask for bevel
     edge_mask_bevel = (dist_transform > 0) & (dist_transform < 0.6)
     edge_mask_float = edge_mask_bevel.astype(np.float32)
     
-    # Normalize gradients
     grad_magnitude = np.sqrt(grad_x**2 + grad_y**2) + 1e-6
     norm_grad_x = grad_x / grad_magnitude
     norm_grad_y = grad_y / grad_magnitude
     
-    # Light from top-right
     light_x, light_y = 0.707, -0.707
     light_facing = (norm_grad_x * light_x + norm_grad_y * light_y) * edge_mask_float
     
     highlight_mask = np.clip(light_facing, 0, None)
     shadow_mask_edge = np.clip(-light_facing, 0, None)
     
-    # Sharper blur
     highlight_mask = cv2.GaussianBlur(highlight_mask, (9, 9), 0)
     shadow_mask_edge = cv2.GaussianBlur(shadow_mask_edge, (9, 9), 0)
     
@@ -369,27 +364,38 @@ def apply_embroidery_effect(design_bgra, stitch_angle=45, stitch_spacing=4):
         shadow_mask_edge = shadow_mask_edge / shadow_mask_edge.max()
     
     # VERY STRONG bevel
-    embroidered_bgr -= shadow_mask_edge[:, :, np.newaxis] * 60  # Increased
-    embroidered_bgr += highlight_mask[:, :, np.newaxis] * 70     # Increased
+    embroidered_bgr -= shadow_mask_edge[:, :, np.newaxis] * 60
+    embroidered_bgr += highlight_mask[:, :, np.newaxis] * 70
     embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
     
-    print(f"  Embroidery: ✓ Strong bevel (shadow=-60, highlight=+70)")
+    print(f"  Embroidery: ✓ Strong bevel")
     
     # ==================================================================
-    # STEP 4: SUPER DENSE STITCHES (filled appearance like SILK)
+    # STEP 4: ULTRA-DENSE STITCHES WITH SHADOWS BETWEEN
     # ==================================================================
     
-    # Generate ULTRA-TIGHT stitches (1px spacing for filled look)
+    # Generate ULTRA-TIGHT stitches
     stitch_pattern = generate_simple_stitch_pattern(alpha, angle=45, spacing=1)
+    
+    # CREATE SHADOW VALLEYS between stitches (like SILK reference)
+    # Dilate stitches slightly to find "between" areas
+    stitch_dilated = cv2.dilate(stitch_pattern, np.ones((2, 2), np.uint8), iterations=1)
+    
+    # Areas that are NOT stitches but ARE close to stitches = valleys
+    valleys = cv2.subtract(stitch_dilated, stitch_pattern)
+    valleys_mask = (valleys > 0) & (alpha > 0)  # Only within design
     
     embroidered_bgr = embroidered_bgr.astype(np.int16)
     
-    # Strong highlights on stitches
+    # DARKEN valleys between stitches (creates depth)
+    embroidered_bgr[valleys_mask] -= 30
+    
+    # BRIGHTEN stitch tops (highlights)
     embroidered_bgr[stitch_pattern > 0] += 60
     
     embroidered_bgr = np.clip(embroidered_bgr, 0, 255).astype(np.uint8)
     
-    print(f"  Embroidery: ✓ Ultra-dense stitches (spacing=1px, highlight=+60)")
+    print(f"  Embroidery: ✓ Ultra-dense stitches with shadow valleys")
     
     # ==================================================================
     # STEP 5: MINIMAL TEXTURE
