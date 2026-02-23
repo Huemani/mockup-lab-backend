@@ -11,6 +11,8 @@ import os
 from PIL import Image
 from typing import Optional
 import requests
+from google import genai
+from google.genai import types
 
 # Initialize FastAPI
 app = FastAPI(
@@ -50,6 +52,23 @@ if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
 else:
     print("✗ Cloudinary configuration incomplete!")
 
+# Gemini AI configuration
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+print("=" * 50)
+print("GEMINI AI CONFIGURATION CHECK:")
+print(f"  API key exists: {bool(GOOGLE_API_KEY)}")
+print("=" * 50)
+
+gemini_client = None
+if GOOGLE_API_KEY:
+    try:
+        gemini_client = genai.Client(api_key=GOOGLE_API_KEY)
+        print("✓ Gemini AI configured successfully")
+    except Exception as e:
+        print(f"✗ Gemini AI configuration failed: {e}")
+else:
+    print("✗ Gemini API key not found!")
+
 # Pydantic models matching frontend
 class Position(BaseModel):
     x: int
@@ -73,6 +92,32 @@ class MockupRequest(BaseModel):
     shadowStrength: float = 0.5      # 0.0 to 1.0, shadow/highlight blend strength
     opacity: float = 1.0              # 0.0 to 1.0, design opacity
     method: str = "dtg"               # "dtg" or "embroidery"
+
+
+# Gemini AI garment swap models
+class GeminiSwapRequest(BaseModel):
+    garmentUrl: str          # Base garment image URL
+    designUrl: str           # Design to place on garment
+    prompt: Optional[str] = None  # Optional custom prompt
+
+# TEST GARMENT DATA (will be replaced with database later)
+TEST_GARMENTS = {
+    "gildan_white_tshirt": {
+        "name": "Gildan Heavy Cotton Tee - White",
+        "supplier": "Gildan",
+        "sku": "G5000",
+        "color": "White",
+        "image_url": "https://res.cloudinary.com/ducsuev69/image/upload/v1/test-garments/white-tshirt.jpg",
+        "displacement_map_url": None  # Will generate on-the-fly
+    },
+    "test_beige_hoodie": {
+        "name": "Test Beige Hoodie",
+        "supplier": "Test",
+        "color": "Beige",
+        "image_url": "https://res.cloudinary.com/ducsuev69/image/upload/v1/test-garments/beige-hoodie.jpg",
+        "displacement_map_url": None
+    }
+}
 
 
 def download_image_from_url(url: str, keep_alpha: bool = False):
@@ -652,6 +697,181 @@ async def health_check():
         "api_secret_set": bool(CLOUDINARY_API_SECRET)
     }
 
+
+
+# ============================================================================
+# GEMINI AI GARMENT SWAP ENDPOINT (TEST)
+# ============================================================================
+
+@app.get("/test-garments")
+async def get_test_garments():
+    """Get available test garments"""
+    return {
+        "success": True,
+        "garments": TEST_GARMENTS
+    }
+
+
+@app.post("/gemini-swap-test")
+async def gemini_swap_test(request: GeminiSwapRequest):
+    """
+    TEST ENDPOINT: Gemini AI garment swap
+    
+    Uses Google Gemini to intelligently place design on garment.
+    Only allowed for database garments (legal safety).
+    """
+    try:
+        if not gemini_client:
+            raise HTTPException(
+                status_code=503, 
+                detail="Gemini AI not configured. Set GOOGLE_API_KEY environment variable."
+            )
+        
+        print(f"\n{'='*60}")
+        print("GEMINI AI GARMENT SWAP TEST")
+        print(f"{'='*60}")
+        print(f"  Garment URL: {request.garmentUrl}")
+        print(f"  Design URL:  {request.designUrl}")
+        
+        # Download images
+        print("\n→ Downloading garment image...")
+        garment_response = requests.get(request.garmentUrl, timeout=30)
+        garment_response.raise_for_status()
+        
+        print("→ Downloading design image...")
+        design_response = requests.get(request.designUrl, timeout=30)
+        design_response.raise_for_status()
+        
+        # Save to temp files for Gemini upload
+        import tempfile
+        import uuid
+        
+        temp_id = str(uuid.uuid4())
+        garment_path = f"/tmp/garment_{temp_id}.jpg"
+        design_path = f"/tmp/design_{temp_id}.png"
+        
+        with open(garment_path, 'wb') as f:
+            f.write(garment_response.content)
+        
+        with open(design_path, 'wb') as f:
+            f.write(design_response.content)
+        
+        print("→ Uploading to Gemini Files API...")
+        
+        # Upload files to Gemini
+        garment_file = gemini_client.files.upload(path=garment_path)
+        design_file = gemini_client.files.upload(path=design_path)
+        
+        print(f"  Garment file URI: {garment_file.uri}")
+        print(f"  Design file URI: {design_file.uri}")
+        
+        # Create prompt
+        prompt = request.prompt or """
+        Edit this garment image by placing the uploaded design on the front center of the garment.
+        
+        Requirements:
+        - Place design on the chest/front center area
+        - Ensure design follows the fabric's texture and wrinkles naturally
+        - Maintain realistic lighting and shadows
+        - Keep garment color and fabric unchanged
+        - Design should look like it's printed/embroidered on the fabric
+        - Preserve everything else in the image
+        
+        Return only the edited image with the design placed naturally on the garment.
+        """
+        
+        print("\n→ Calling Gemini image editing...")
+        print(f"  Model: gemini-2.0-flash-exp")
+        
+        # Call Gemini API
+        response = gemini_client.models.generate_content(
+            model='gemini-2.0-flash-exp',
+            contents=[
+                types.Part.from_uri(
+                    file_uri=garment_file.uri,
+                    mime_type=garment_file.mime_type
+                ),
+                types.Part.from_uri(
+                    file_uri=design_file.uri,
+                    mime_type=design_file.mime_type
+                ),
+                prompt
+            ],
+            config=types.GenerateContentConfig(
+                temperature=0.4,  # Lower for consistency
+                response_modalities=["IMAGE"]
+            )
+        )
+        
+        print("✓ Gemini response received")
+        
+        # Extract generated image
+        if not response.candidates or not response.candidates[0].content.parts:
+            raise HTTPException(
+                status_code=500,
+                detail="Gemini did not return an image"
+            )
+        
+        image_part = response.candidates[0].content.parts[0]
+        
+        if hasattr(image_part, 'inline_data'):
+            # Image returned as inline data
+            image_data = image_part.inline_data.data
+            print("→ Image received as inline data")
+        elif hasattr(image_part, 'file_data'):
+            # Image returned as file reference
+            print(f"→ Image file URI: {image_part.file_data.file_uri}")
+            # Download from Gemini
+            file_response = requests.get(image_part.file_data.file_uri)
+            image_data = file_response.content
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="Unexpected Gemini response format"
+            )
+        
+        # Upload result to Cloudinary
+        print("\n→ Uploading result to Cloudinary...")
+        
+        result = cloudinary.uploader.upload(
+            image_data,
+            folder="mockups/gemini-test",
+            resource_type="image"
+        )
+        
+        result_url = result['secure_url']
+        print(f"✓ Result uploaded: {result_url}")
+        
+        # Cleanup temp files
+        try:
+            os.remove(garment_path)
+            os.remove(design_path)
+        except:
+            pass
+        
+        print(f"\n{'='*60}")
+        print("GEMINI SWAP COMPLETE")
+        print(f"{'='*60}\n")
+        
+        return {
+            "success": True,
+            "result_url": result_url,
+            "gemini_used": True,
+            "message": "Garment swap completed successfully"
+        }
+        
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=400, detail=f"Failed to download image: {str(e)}")
+    except Exception as e:
+        print(f"✗ Error in Gemini swap: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+# ============================================================================
+# STANDARD MOCKUP ENDPOINT
+# ============================================================================
 
 @app.post("/generate-mockup")
 async def generate_mockup(request: MockupRequest):
