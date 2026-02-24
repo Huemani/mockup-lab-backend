@@ -1153,36 +1153,37 @@ async def transform_garment(request: BrandColorTransformRequest):
         
         priority_views = view_types.get(library_view, ["front", "back", "side", "detail"])
         
-        # Search for each view type in the color's folder
+        # SIMPLIFIED: Send only PRIMARY reference (front OR back, not all)
+        # Too many reference images may confuse the model
         reference_urls = []
         found_views = []
         
-        for view in priority_views:
-            # PRIORITY 1: Search for descriptive filename in sub-folder (e.g., dusk/dusk-front.webp)
-            filename = f"{color_folder}-{view}"
+        # Get PRIMARY view only (front for front photos, back for back photos)
+        primary_view = priority_views[0]  # First in priority list
+        
+        filename = f"{color_folder}-{primary_view}"
+        search_result = cloudinary.Search() \
+            .expression(f"folder:{folder_path} AND filename:{filename}") \
+            .max_results(1) \
+            .execute()
+        
+        if search_result.get('resources'):
+            url = search_result['resources'][0]['secure_url']
+            reference_urls.append(url)
+            found_views.append(primary_view)
+            print(f"  ✓ Found {primary_view}: {url.split('/')[-1]}")
+        else:
+            # Fallback: try simple filename
             search_result = cloudinary.Search() \
-                .expression(f"folder:{folder_path} AND filename:{filename}") \
+                .expression(f"folder:{folder_path} AND filename:{primary_view}") \
                 .max_results(1) \
                 .execute()
             
             if search_result.get('resources'):
                 url = search_result['resources'][0]['secure_url']
                 reference_urls.append(url)
-                found_views.append(view)
-                print(f"  ✓ Found {view}: {url.split('/')[-1]}")
-                continue
-            
-            # FALLBACK: Try simple filename in sub-folder (e.g., dusk/front.webp)
-            search_result = cloudinary.Search() \
-                .expression(f"folder:{folder_path} AND filename:{view}") \
-                .max_results(1) \
-                .execute()
-            
-            if search_result.get('resources'):
-                url = search_result['resources'][0]['secure_url']
-                reference_urls.append(url)
-                found_views.append(view)
-                print(f"  ✓ Found {view} (simple name): {url.split('/')[-1]}")
+                found_views.append(primary_view)
+                print(f"  ✓ Found {primary_view} (simple name): {url.split('/')[-1]}")
         
         # FALLBACK: Try old flat structure (backward compatibility)
         if not reference_urls:
@@ -1228,7 +1229,7 @@ async def transform_garment(request: BrandColorTransformRequest):
             print(f"  Views: {', '.join(found_views)}")
         
         # Generate cache key (include view type so front/back mockups cache separately)
-        model_name = 'nano-banana-v6'  # Ultra-clear prompt: ONLY change color, keep everything else
+        model_name = 'nano-banana-v7'  # Nano Banana + detailed texture prompt + multi-reference
         cache_key = f"{request.libraryPhotoId}_{library_view}_{request.brandId}_{request.productId}_{request.colorId}_{model_name}"
         cache_folder = "cache/garment-transforms"
         
@@ -1315,42 +1316,55 @@ async def transform_garment(request: BrandColorTransformRequest):
         # Determine base mime type
         base_mime = 'image/png' if base_path.endswith('.png') else 'image/jpeg'
         
-        # Create ULTRA-CLEAR prompt - ONLY change t-shirt COLOR, nothing else!
+        # Create ultra-specific prompt for MULTIPLE reference images
+        # Based on original prompt that worked - just needed more reference images
         color_name = request.colorId.replace('_', ' ').title()
         
         ref_count = len(reference_data_list)
         if ref_count == 1:
-            ref_text = f"Image 2: A t-shirt in {color_name} color"
+            ref_text = f"Image 2: Comfort Colors garment-dyed t-shirt in {color_name}"
         else:
-            ref_text = f"Images 2-{ref_count+1}: Multiple views of a t-shirt in {color_name} color"
+            ref_text = f"Images 2-{ref_count+1}: Multiple views of the same Comfort Colors garment-dyed t-shirt in {color_name}"
         
-        prompt = f"""TASK: Change ONLY the t-shirt color in Image 1.
-
-Image 1: Person wearing a white t-shirt
+        prompt = f"""You are looking at {ref_count + 1} images:
+Image 1: Person wearing white t-shirt
 {ref_text}
 
-INSTRUCTIONS:
-1. KEEP EVERYTHING from Image 1:
-   - The person (face, body, pose)
-   - The background
-   - The lighting
-   - The wrinkles and folds in the fabric
-   - Everything except the color
+Your task: Change ONLY the t-shirt color in Image 1 to match the t-shirt color in the reference images.
 
-2. CHANGE ONLY:
-   - The t-shirt color to match the {color_name} color shown in the reference images
-   - Copy the EXACT color tone, including:
-     * Color variations (garment-dyed look with slight irregularities)
-     * Muted/dusty appearance (not bright or saturated)
-     * Vintage/washed quality
+CRITICAL - Study ALL reference images to understand the EXACT fabric appearance:
 
-3. DO NOT:
-   - Replace the person
-   - Replace the background
-   - Change the pose
-   - Change anything except the t-shirt's color
+1. COLOR TRANSFER ONLY:
+   - Change ONLY the t-shirt fabric color
+   - Keep the person, pose, background, lighting UNCHANGED
+   - Preserve all wrinkles, folds, and fabric texture from Image 1
 
-The result should be: The SAME person in the SAME pose, but wearing a {color_name} t-shirt instead of white."""
+2. COLOR VARIATIONS (garment-dyed look):
+   - The color is NOT uniform! Study the reference images carefully
+   - There are SLIGHT color variations across the fabric (some areas slightly lighter/darker)
+   - This is intentional - it's the "garment-dyed" look
+   - Copy these EXACT color irregularities
+
+3. WASHED/VINTAGE APPEARANCE:
+   - The fabric looks slightly faded and lived-in
+   - NOT a bright, fresh, new t-shirt color
+   - Has a soft, washed-out quality
+   - Slightly muted/dusty tone (not saturated)
+
+4. FABRIC TEXTURE DETAILS:
+   - Soft cotton with visible texture
+   - Not smooth or plasticky
+   - Has depth and dimension from the garment-dye process
+
+5. EXACT COLOR MATCHING:
+   - Study the EXACT {color_name} tone across all reference images
+   - Match this EXACT hue (not darker, not lighter, not grayer)
+   - Preserve the dusty, muted quality
+
+The final result should look like the SAME person from Image 1, wearing an ACTUAL Comfort Colors garment-dyed {color_name} t-shirt that's been washed a few times.
+
+KEEP: Person, face, body, pose, background, lighting, wrinkles, folds - everything from Image 1
+CHANGE: Only the t-shirt color to match {color_name}"""
         
         # Build contents array with base image + ALL reference images
         contents = [types.Part.from_bytes(data=base_data, mime_type=base_mime)]
