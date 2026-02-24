@@ -1024,7 +1024,7 @@ async def transform_garment(request: BrandColorTransformRequest):
         reference_url = product["colors"][request.colorId]
         
         # Generate cache key (include model name for version control)
-        model_name = 'nano-banana-v2'  # Updated for texture-focused prompt
+        model_name = 'nano-banana-v3'  # Ultra-specific texture prompt
         cache_key = f"{request.libraryPhotoId}_{request.brandId}_{request.productId}_{request.colorId}_{model_name}"
         cache_folder = "cache/garment-transforms"
         
@@ -1101,23 +1101,39 @@ async def transform_garment(request: BrandColorTransformRequest):
         base_mime = 'image/png' if base_path.endswith('.png') else 'image/jpeg'
         reference_mime = 'image/webp' if reference_path.endswith('.webp') else ('image/png' if reference_path.endswith('.png') else 'image/jpeg')
         
-        # Create prompt focused on TEXTURE TRANSFER, not just color overlay
+        # Create ultra-specific prompt focused on GARMENT-DYED texture
         color_name = request.colorId.replace('_', ' ').title()
-        prompt = f"""Look at these two images:
-Image 1: Person wearing a white t-shirt
-Image 2: {brand['name']} {product['name']} in {color_name} color
+        prompt = f"""You are looking at two t-shirts:
+Image 1: Person in white t-shirt
+Image 2: Comfort Colors garment-dyed t-shirt in {color_name}
 
-Replace the white t-shirt in Image 1 with the EXACT t-shirt from Image 2.
+Your task: Make the t-shirt in Image 1 look EXACTLY like the t-shirt in Image 2.
 
-CRITICAL - This is NOT just a color change! You must:
-- Copy the FABRIC TEXTURE from the reference (garment-dyed, vintage, washed look)
-- Copy the MATERIAL APPEARANCE (soft cotton with slight color variations)
-- Match the EXACT color tone AND texture simultaneously
-- Include any subtle color irregularities that give it a lived-in feel
+CRITICAL TEXTURE DETAILS - This is garment-dyed fabric:
+1. COLOR VARIATIONS: The color is NOT uniform! Look at Image 2 carefully:
+   - There are SLIGHT color variations across the fabric (some areas slightly lighter/darker)
+   - This is intentional - it's the "garment-dyed" look
+   - Copy these EXACT color irregularities
+   
+2. WASHED/VINTAGE APPEARANCE:
+   - The fabric looks slightly faded and lived-in
+   - NOT a bright, fresh, new t-shirt color
+   - Has a soft, washed-out quality
+   - Slightly muted/dusty tone (not saturated)
 
-Think of it as: "What if the person in Image 1 was wearing the ACTUAL t-shirt from Image 2?"
+3. FABRIC TEXTURE:
+   - Soft cotton with visible texture
+   - Not smooth or plasticky
+   - Has depth and dimension from the garment-dye process
 
-Keep the person, pose, lighting, and background from Image 1 completely unchanged."""
+4. EXACT COLOR MATCHING:
+   - Study the EXACT purple/mauve tone in Image 2
+   - Match this EXACT hue (not darker, not lighter, not grayer)
+   - Preserve the dusty, muted quality
+
+The final result should look like someone wearing an ACTUAL Comfort Colors garment-dyed t-shirt that's been washed a few times.
+
+Keep person, pose, wrinkles, lighting, and background from Image 1 unchanged."""
         
         # Call Gemini Nano Banana (image editing specialist) - Billing enabled!
         print("  Calling Gemini Nano Banana (2.5 Flash Image)...")
@@ -1130,7 +1146,7 @@ Keep the person, pose, lighting, and background from Image 1 completely unchange
                 prompt
             ],
             config=types.GenerateContentConfig(
-                temperature=0.8,  # Increased for more creative texture transfer
+                temperature=0.9,  # Max creativity for texture transfer
                 response_modalities=["IMAGE"]
             )
         )
