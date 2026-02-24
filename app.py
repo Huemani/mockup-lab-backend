@@ -1229,7 +1229,7 @@ async def transform_garment(request: BrandColorTransformRequest):
             print(f"  Views: {', '.join(found_views)}")
         
         # Generate cache key (include view type so front/back mockups cache separately)
-        model_name = 'nano-banana-v7'  # Nano Banana + detailed texture prompt + multi-reference
+        model_name = 'nano-banana-pro-v1'  # Nano Banana Pro + Therese's perfect prompt
         cache_key = f"{request.libraryPhotoId}_{library_view}_{request.brandId}_{request.productId}_{request.colorId}_{model_name}"
         cache_folder = "cache/garment-transforms"
         
@@ -1316,55 +1316,22 @@ async def transform_garment(request: BrandColorTransformRequest):
         # Determine base mime type
         base_mime = 'image/png' if base_path.endswith('.png') else 'image/jpeg'
         
-        # Create ultra-specific prompt for MULTIPLE reference images
-        # Based on original prompt that worked - just needed more reference images
+        # Use Therese's proven prompt - works perfectly with Nano Banana Pro!
         color_name = request.colorId.replace('_', ' ').title()
         
         ref_count = len(reference_data_list)
-        if ref_count == 1:
-            ref_text = f"Image 2: Comfort Colors garment-dyed t-shirt in {color_name}"
-        else:
-            ref_text = f"Images 2-{ref_count+1}: Multiple views of the same Comfort Colors garment-dyed t-shirt in {color_name}"
         
-        prompt = f"""You are looking at {ref_count + 1} images:
-Image 1: Person wearing white t-shirt
-{ref_text}
+        prompt = f"""Use image 1 as the base image and replace the t-shirt with the t-shirt from the reference images.
 
-Your task: Change ONLY the t-shirt color in Image 1 to match the t-shirt color in the reference images.
+Transfer the exact color, pigment, garment-dye and wash level from the reference images so the shirt in image 1 clearly adopts the same worn and washed material look.
 
-CRITICAL - Study ALL reference images to understand the EXACT fabric appearance:
+The fabric must behave like real garment-dyed cotton with subtle tonal variation, softly faded seams and edges, slightly uneven pigment distribution and a matte, broken-in surface.
 
-1. COLOR TRANSFER ONLY:
-   - Change ONLY the t-shirt fabric color
-   - Keep the person, pose, background, lighting UNCHANGED
-   - Preserve all wrinkles, folds, and fabric texture from Image 1
+Follow the lighting and shadows from image 1 so the new shirt integrates naturally on the body.
 
-2. COLOR VARIATIONS (garment-dyed look):
-   - The color is NOT uniform! Study the reference images carefully
-   - There are SLIGHT color variations across the fabric (some areas slightly lighter/darker)
-   - This is intentional - it's the "garment-dyed" look
-   - Copy these EXACT color irregularities
+Keep the same person, pose, framing and background.
 
-3. WASHED/VINTAGE APPEARANCE:
-   - The fabric looks slightly faded and lived-in
-   - NOT a bright, fresh, new t-shirt color
-   - Has a soft, washed-out quality
-   - Slightly muted/dusty tone (not saturated)
-
-4. FABRIC TEXTURE DETAILS:
-   - Soft cotton with visible texture
-   - Not smooth or plasticky
-   - Has depth and dimension from the garment-dye process
-
-5. EXACT COLOR MATCHING:
-   - Study the EXACT {color_name} tone across all reference images
-   - Match this EXACT hue (not darker, not lighter, not grayer)
-   - Preserve the dusty, muted quality
-
-The final result should look like the SAME person from Image 1, wearing an ACTUAL Comfort Colors garment-dyed {color_name} t-shirt that's been washed a few times.
-
-KEEP: Person, face, body, pose, background, lighting, wrinkles, folds - everything from Image 1
-CHANGE: Only the t-shirt color to match {color_name}"""
+Do not alter anything else."""
         
         # Build contents array with base image + ALL reference images
         contents = [types.Part.from_bytes(data=base_data, mime_type=base_mime)]
@@ -1376,14 +1343,14 @@ CHANGE: Only the t-shirt color to match {color_name}"""
         # Add prompt at the end
         contents.append(prompt)
         
-        # Call Gemini Nano Banana with ALL reference images
-        print(f"  Calling Gemini Nano Banana with {ref_count} reference image(s)...")
+        # Call Gemini Nano Banana PRO with ALL reference images
+        print(f"  Calling Gemini Nano Banana PRO with {ref_count} reference image(s)...")
         print(f"  Brand: {brand['name']}, Product: {product['name']}, Color: {color_name}")
         response = gemini_client.models.generate_content(
-            model='models/gemini-2.5-flash-image',  # Nano Banana - BEST for selective editing!
+            model='models/nano-banana-pro-preview',  # Nano Banana PRO - BEST results!
             contents=contents,
             config=types.GenerateContentConfig(
-                temperature=0.9,  # Max creativity for texture transfer
+                temperature=0.9,  # High creativity for texture transfer
                 response_modalities=["IMAGE"]
             )
         )
