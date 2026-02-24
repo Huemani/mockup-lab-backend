@@ -121,6 +121,7 @@ LIBRARY_PHOTOS = {
         "type": "tshirt",
         "view": "front",
         "base_color": "white",
+        "garment_type": "t-shirt",  # Used in replacement prompt
         "image_url": "https://res.cloudinary.com/ducsuev69/image/upload/v1771930556/front-001_ozb9fv.png",
         "displacement_map_url": None
     }
@@ -202,6 +203,7 @@ BRAND_REFERENCES = {
             "1717": {
                 "name": "1717 Heavyweight Tee",
                 "type": "tshirt",
+                "garment_type": "t-shirt",  # Used in replacement prompt
                 "colors": {
                     "white": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/white.jpg",
                     "black": "https://res.cloudinary.com/ducsuev69/image/upload/v1/references/comfort-colors/1717/black.jpg",
@@ -1228,48 +1230,24 @@ async def transform_garment(request: BrandColorTransformRequest):
         if found_views:
             print(f"  Views: {', '.join(found_views)}")
         
-        # Generate cache key (include view type so front/back mockups cache separately)
-        model_name = 'nano-banana-pro-v1'  # Nano Banana Pro + Therese's perfect prompt
-        cache_key = f"{request.libraryPhotoId}_{library_view}_{request.brandId}_{request.productId}_{request.colorId}_{model_name}"
-        cache_folder = "cache/garment-transforms"
+        # Model name for tracking (no caching for Option A)
+        model_name = 'nano-banana-pro-v2'  # Universal garment replacement (t-shirt→hoodie works!)
         
         print(f"\n{'='*60}")
         print("GARMENT TRANSFORMATION REQUEST")
         print(f"{'='*60}")
-        print(f"  Library Photo: {request.libraryPhotoId}")
+        print(f"  Library Photo: {request.libraryPhotoId} ({library_view} view)")
         print(f"  Brand: {brand['name']}")
         print(f"  Product: {product['name']}")
         print(f"  Color: {request.colorId}")
-        print(f"  Cache Key: {cache_key}")
+        print(f"  Model: {model_name}")
         
-        # Check if cached version exists
-        print("\n→ Checking cache...")
-        try:
-            # Try to get cached image from Cloudinary
-            cached_url = f"https://res.cloudinary.com/ducsuev69/image/upload/v1/{cache_folder}/{cache_key}.png"
-            
-            # Quick check if exists (will throw if not found)
-            test_response = requests.head(cached_url, timeout=5)
-            if test_response.status_code == 200:
-                print(f"✓ Cache HIT! Using cached transformation")
-                print(f"  Cached URL: {cached_url}")
-                print(f"\n{'='*60}\n")
-                
-                return {
-                    "success": True,
-                    "result_url": cached_url,
-                    "cached": True,
-                    "cache_key": cache_key,
-                    "message": "Retrieved from cache"
-                }
-        except:
-            print("  Cache MISS - will generate new transformation")
-        
-        # Cache miss - run Gemini transformation
-        print("\n→ Running Gemini transformation...")
+        # Option A: No caching - always generate fresh mockup (privacy-friendly!)
+        print("\n→ Generating fresh mockup (no storage, privacy-friendly)...")
         
         # Download base photo
-        print("  Downloading base photo...")
+        print("\n→ Downloading images...")
+        print(f"  Base photo...")
         base_response = requests.get(base_photo_url, timeout=30)
         base_response.raise_for_status()
         
@@ -1316,18 +1294,18 @@ async def transform_garment(request: BrandColorTransformRequest):
         # Determine base mime type
         base_mime = 'image/png' if base_path.endswith('.png') else 'image/jpeg'
         
-        # Use Therese's proven prompt - works perfectly with Nano Banana Pro!
-        color_name = request.colorId.replace('_', ' ').title()
+        # Use Therese's proven universal prompt - works for any garment type!
+        base_garment = library_photo.get("garment_type", "t-shirt")
+        target_garment_type = product.get("garment_type", "t-shirt")
         
-        ref_count = len(reference_data_list)
-        
-        prompt = f"""Use image 1 as the base image and replace the t-shirt with the t-shirt from the reference images.
+        # Determine garment name for prompt (e.g., "t-shirt", "hoodie", "crewneck")
+        prompt = f"""Use image 1 as the base image and replace the {base_garment} with the {target_garment_type} from the reference images.
 
-Transfer the exact color, pigment, garment-dye and wash level from the reference images so the shirt in image 1 clearly adopts the same worn and washed material look.
+Transfer the exact color variation, pigment, texture, garment-dye and wash level from the reference images.
 
-The fabric must behave like real garment-dyed cotton with subtle tonal variation, softly faded seams and edges, slightly uneven pigment distribution and a matte, broken-in surface.
+Transfer the exact product design details and features from the reference images.
 
-Follow the lighting and shadows from image 1 so the new shirt integrates naturally on the body.
+Follow the lighting and shadows from image 1 so the new garment integrates naturally on the body.
 
 Keep the same person, pose, framing and background.
 
@@ -1412,28 +1390,20 @@ Do not alter anything else."""
             print(f"  Available attributes: {[attr for attr in dir(image_part) if not attr.startswith('_')]}")
             raise HTTPException(status_code=500, detail="Unexpected Gemini response format")
         
-        # Upload to Cloudinary cache
-        print(f"\n→ Caching result to Cloudinary...")
-        print(f"  Cache folder: {cache_folder}")
-        print(f"  Cache key: {cache_key}")
+        # Option A: Return as base64 (NO storage - privacy-friendly!)
+        print(f"\n→ Encoding result as base64...")
         
-        result = cloudinary.uploader.upload(
-            image_data,
-            folder=cache_folder,
-            public_id=cache_key,
-            resource_type="image",
-            overwrite=True  # Overwrite if exists
-        )
+        import base64
+        result_base64 = base64.b64encode(image_data).decode('utf-8')
         
-        result_url = result['secure_url']
-        print(f"✓ Cached: {result_url}")
+        print(f"  ✓ Encoded successfully!")
+        print(f"  Size: {len(result_base64)} characters")
         
         # Cleanup temp files
         try:
             os.remove(base_path)
-            os.remove(reference_path)
-        except:
-            pass
+        except Exception as e:
+            print(f"  Warning: Could not delete temp file: {e}")
         
         print(f"\n{'='*60}")
         print("TRANSFORMATION COMPLETE")
@@ -1441,10 +1411,13 @@ Do not alter anything else."""
         
         return {
             "success": True,
-            "result_url": result_url,
-            "cached": False,
-            "cache_key": cache_key,
-            "message": f"Transformed to {brand['name']} {product['name']} - {request.colorId.replace('_', ' ')}"
+            "image_base64": result_base64,
+            "mime_type": "image/png",
+            "brand": brand["name"],
+            "product": product["name"],
+            "color": color_name,
+            "model_used": model_to_use,
+            "message": "Image returned as base64 - not stored on server"
         }
         
     except Exception as e:
