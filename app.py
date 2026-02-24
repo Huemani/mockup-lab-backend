@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import cloudinary
 import cloudinary.uploader
+from cloudinary import Search
 from io import BytesIO
 import os
 from PIL import Image
@@ -114,13 +115,60 @@ class BrandColorTransformRequest(BaseModel):
 # References: Brand/color combinations to transform into
 
 LIBRARY_PHOTOS = {
-    "photo_001": {
-        "name": "Casual T-Shirt Photo #1",
+    # Front views - multiple poses
+    "front_001": {
+        "name": "Front View - Casual Pose",
         "type": "tshirt",
+        "view": "front",
         "base_color": "white",
         "image_url": "https://res.cloudinary.com/ducsuev69/image/upload/v1771879971/photo-001_bfwkdi.png",
         "displacement_map_url": None
     }
+    # Example: Add more front views
+    # "front_002": {
+    #     "name": "Front View - Arms Crossed",
+    #     "type": "tshirt",
+    #     "view": "front",
+    #     "base_color": "white",
+    #     "image_url": "https://res.cloudinary.com/.../front-002.png",
+    #     "displacement_map_url": None
+    # },
+    # "front_003": {
+    #     "name": "Front View - Hands in Pockets",
+    #     "type": "tshirt",
+    #     "view": "front",
+    #     "base_color": "white",
+    #     "image_url": "https://res.cloudinary.com/.../front-003.png",
+    #     "displacement_map_url": None
+    # },
+    
+    # Back views - multiple poses
+    # "back_001": {
+    #     "name": "Back View - Casual Pose",
+    #     "type": "tshirt",
+    #     "view": "back",
+    #     "base_color": "white",
+    #     "image_url": "https://res.cloudinary.com/.../back-001.png",
+    #     "displacement_map_url": None
+    # },
+    # "back_002": {
+    #     "name": "Back View - Arms Crossed",
+    #     "type": "tshirt",
+    #     "view": "back",
+    #     "base_color": "white",
+    #     "image_url": "https://res.cloudinary.com/.../back-002.png",
+    #     "displacement_map_url": None
+    # },
+    
+    # Side views - angled shots
+    # "side_001": {
+    #     "name": "Side View - 45° Angle",
+    #     "type": "tshirt",
+    #     "view": "side",
+    #     "base_color": "white",
+    #     "image_url": "https://res.cloudinary.com/.../side-001.png",
+    #     "displacement_map_url": None
+    # }
 }
 
 # Reference images for brand/product/color transformations
@@ -245,10 +293,10 @@ BRAND_REFERENCES = {
 
 # For backwards compatibility with existing /test-garments endpoint
 TEST_GARMENTS = {
-    "photo_001": {  # ← Changed to match LIBRARY_PHOTOS ID
-        "name": "White T-Shirt Photo #1",
+    "front_001": {  # ← Matches LIBRARY_PHOTOS ID
+        "name": "Front View - Casual Pose",
         "supplier": "Library",
-        "sku": "LIB-001",
+        "sku": "LIB-FRONT-001",
         "color": "White",
         "image_url": "https://res.cloudinary.com/ducsuev69/image/upload/v1771879971/photo-001_bfwkdi.png",
         "displacement_map_url": None
@@ -972,6 +1020,66 @@ async def get_brand_references():
     }
 
 
+@app.get("/get-color-references/{brand_id}/{product_id}/{color_id}")
+async def get_color_references(brand_id: str, product_id: str, color_id: str):
+    """
+    Get ALL reference images for a specific color.
+    
+    NEW STRUCTURE: references/{brand}/{product}/{color}/front.webp
+    FALLBACK: references/{brand}/{product}/{color}-front.ext (flat structure)
+    """
+    try:
+        brand_folder = brand_id.replace('_', '-')
+        color_folder = color_id.replace('_', '-')
+        
+        # NEW: Search in color sub-folder
+        folder_path = f"references/{brand_folder}/{product_id}/{color_folder}"
+        
+        print(f"Searching for references in: {folder_path}/")
+        
+        search_result = cloudinary.Search() \
+            .expression(f"folder:{folder_path}") \
+            .sort_by('filename', 'asc') \
+            .max_results(10) \
+            .execute()
+        
+        if not search_result.get('resources'):
+            # FALLBACK: Try old flat structure
+            print(f"No sub-folder found, trying flat structure...")
+            old_folder_path = f"references/{brand_folder}/{product_id}"
+            
+            search_result = cloudinary.Search() \
+                .expression(f"folder:{old_folder_path} AND filename:{color_folder}-*") \
+                .sort_by('public_id', 'asc') \
+                .max_results(10) \
+                .execute()
+            
+            if not search_result.get('resources'):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No reference images found for {brand_id}/{product_id}/{color_id}"
+                )
+        
+        urls = [resource['secure_url'] for resource in search_result['resources']]
+        
+        print(f"✓ Found {len(urls)} reference image(s)")
+        
+        return {
+            "success": True,
+            "brand_id": brand_id,
+            "product_id": product_id,
+            "color_id": color_id,
+            "count": len(urls),
+            "urls": urls
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error fetching color references: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/get-color-reference/{brand_id}/{product_id}/{color_id}")
 async def get_color_reference(brand_id: str, product_id: str, color_id: str):
     """Get the reference image URL for a specific brand/product/color combination"""
@@ -1019,13 +1127,109 @@ async def transform_garment(request: BrandColorTransformRequest):
         if request.colorId not in product["colors"]:
             raise HTTPException(status_code=404, detail="Color not found")
         
-        # Get URLs
-        base_photo_url = LIBRARY_PHOTOS[request.libraryPhotoId]["image_url"]
-        reference_url = product["colors"][request.colorId]
+        # Get base photo info
+        library_photo = LIBRARY_PHOTOS[request.libraryPhotoId]
+        base_photo_url = library_photo["image_url"]
+        library_view = library_photo.get("view", "front")  # Default to front if not specified
         
-        # Generate cache key (include model name for version control)
-        model_name = 'nano-banana-v3'  # Ultra-specific texture prompt
-        cache_key = f"{request.libraryPhotoId}_{request.brandId}_{request.productId}_{request.colorId}_{model_name}"
+        # Get reference images with SMART matching based on library photo view
+        print(f"\n→ Fetching reference images for {request.colorId}...")
+        print(f"  Library photo view: {library_view}")
+        
+        # NEW STRUCTURE: Each color has its own folder
+        # Path: references/{brand}/{product}/{color}/front.webp
+        brand_folder = request.brandId.replace('_', '-')
+        color_folder = request.colorId.replace('_', '-')
+        folder_path = f"references/{brand_folder}/{request.productId}/{color_folder}"
+        
+        print(f"  Searching in: {folder_path}/")
+        
+        # Define view priority based on library photo view
+        view_types = {
+            "front": ["front", "detail", "side"],  # For front mockups, prioritize front refs
+            "back": ["back", "detail", "side"],    # For back mockups, prioritize back refs
+            "side": ["side", "front", "back", "detail"]  # For side mockups, use all
+        }
+        
+        priority_views = view_types.get(library_view, ["front", "back", "side", "detail"])
+        
+        # Search for each view type in the color's folder
+        reference_urls = []
+        found_views = []
+        
+        for view in priority_views:
+            # PRIORITY 1: Search for descriptive filename in sub-folder (e.g., dusk/dusk-front.webp)
+            filename = f"{color_folder}-{view}"
+            search_result = cloudinary.Search() \
+                .expression(f"folder:{folder_path} AND filename:{filename}") \
+                .max_results(1) \
+                .execute()
+            
+            if search_result.get('resources'):
+                url = search_result['resources'][0]['secure_url']
+                reference_urls.append(url)
+                found_views.append(view)
+                print(f"  ✓ Found {view}: {url.split('/')[-1]}")
+                continue
+            
+            # FALLBACK: Try simple filename in sub-folder (e.g., dusk/front.webp)
+            search_result = cloudinary.Search() \
+                .expression(f"folder:{folder_path} AND filename:{view}") \
+                .max_results(1) \
+                .execute()
+            
+            if search_result.get('resources'):
+                url = search_result['resources'][0]['secure_url']
+                reference_urls.append(url)
+                found_views.append(view)
+                print(f"  ✓ Found {view} (simple name): {url.split('/')[-1]}")
+        
+        # FALLBACK: Try old flat structure (backward compatibility)
+        if not reference_urls:
+            print(f"  No sub-folders found, trying flat structure...")
+            
+            # Try: references/{brand}/{product}/{color}-{view}.ext
+            old_folder_path = f"references/{brand_folder}/{request.productId}"
+            
+            for view in priority_views:
+                filename = f"{color_folder}-{view}"
+                search_result = cloudinary.Search() \
+                    .expression(f"folder:{old_folder_path} AND filename:{filename}") \
+                    .max_results(1) \
+                    .execute()
+                
+                if search_result.get('resources'):
+                    url = search_result['resources'][0]['secure_url']
+                    reference_urls.append(url)
+                    found_views.append(view)
+                    print(f"  ✓ Found {view} (flat): {url.split('/')[-1]}")
+        
+        # LAST FALLBACK: Single file without view suffix (legacy)
+        if not reference_urls:
+            print(f"  Trying legacy single file...")
+            old_folder_path = f"references/{brand_folder}/{request.productId}"
+            
+            search_result = cloudinary.Search() \
+                .expression(f"folder:{old_folder_path} AND filename:{color_folder}") \
+                .max_results(1) \
+                .execute()
+            
+            if search_result.get('resources'):
+                reference_urls = [search_result['resources'][0]['secure_url']]
+                print(f"  ✓ Found legacy file")
+            else:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No reference images found for {request.brandId}/{request.productId}/{request.colorId}"
+                )
+        
+        print(f"\n  Total: {len(reference_urls)} reference image(s) selected")
+        if found_views:
+            print(f"  Views: {', '.join(found_views)}")
+        
+        # Generate cache key (include view type so front/back mockups cache separately)
+        model_name = 'nano-banana-v5'  # Updated for new library photo ID structure (front_001)
+        cache_key = f"{request.libraryPhotoId}_{library_view}_{request.brandId}_{request.productId}_{request.colorId}_{model_name}"
         cache_folder = "cache/garment-transforms"
         
         print(f"\n{'='*60}")
@@ -1063,14 +1267,19 @@ async def transform_garment(request: BrandColorTransformRequest):
         # Cache miss - run Gemini transformation
         print("\n→ Running Gemini transformation...")
         
-        # Download images
+        # Download base photo
         print("  Downloading base photo...")
         base_response = requests.get(base_photo_url, timeout=30)
         base_response.raise_for_status()
         
-        print("  Downloading reference garment...")
-        reference_response = requests.get(reference_url, timeout=30)
-        reference_response.raise_for_status()
+        # Download ALL reference images
+        print(f"  Downloading {len(reference_urls)} reference image(s)...")
+        reference_responses = []
+        for i, ref_url in enumerate(reference_urls, 1):
+            print(f"    Downloading reference {i}/{len(reference_urls)}...")
+            ref_response = requests.get(ref_url, timeout=30)
+            ref_response.raise_for_status()
+            reference_responses.append((ref_url, ref_response.content))
         
         # Save to temp files
         import tempfile
@@ -1078,39 +1287,51 @@ async def transform_garment(request: BrandColorTransformRequest):
         
         temp_id = str(uuid.uuid4())
         base_path = f"/tmp/base_{temp_id}.png"
-        reference_path = f"/tmp/reference_{temp_id}.png"
         
         with open(base_path, 'wb') as f:
             f.write(base_response.content)
         
-        with open(reference_path, 'wb') as f:
-            f.write(reference_response.content)
-        
-        # Read images as bytes for inline data
-        print("  Reading images...")
+        # Read base image as bytes for inline data
+        print("  Preparing images for Gemini...")
         with open(base_path, 'rb') as f:
             base_data = f.read()
         
-        with open(reference_path, 'rb') as f:
-            reference_data = f.read()
+        # Prepare ALL reference images as bytes
+        reference_data_list = []
+        for ref_url, ref_content in reference_responses:
+            # Determine mime type from URL
+            if ref_url.endswith('.webp'):
+                ref_mime = 'image/webp'
+            elif ref_url.endswith('.png'):
+                ref_mime = 'image/png'
+            else:
+                ref_mime = 'image/jpeg'
+            
+            reference_data_list.append((ref_content, ref_mime))
         
+        print(f"  ✓ Prepared {len(reference_data_list)} reference image(s)")
         print(f"  Base image size: {len(base_data)} bytes")
-        print(f"  Reference image size: {len(reference_data)} bytes")
         
-        # Determine mime types
+        # Determine base mime type
         base_mime = 'image/png' if base_path.endswith('.png') else 'image/jpeg'
-        reference_mime = 'image/webp' if reference_path.endswith('.webp') else ('image/png' if reference_path.endswith('.png') else 'image/jpeg')
         
-        # Create ultra-specific prompt focused on GARMENT-DYED texture
+        # Create ultra-specific prompt for MULTIPLE reference images
         color_name = request.colorId.replace('_', ' ').title()
-        prompt = f"""You are looking at two t-shirts:
+        
+        ref_count = len(reference_data_list)
+        if ref_count == 1:
+            ref_text = "Image 2: Comfort Colors garment-dyed t-shirt in {color_name}"
+        else:
+            ref_text = f"Images 2-{ref_count+1}: Multiple views of the same Comfort Colors garment-dyed t-shirt in {color_name}"
+        
+        prompt = f"""You are looking at {ref_count + 1} images:
 Image 1: Person in white t-shirt
-Image 2: Comfort Colors garment-dyed t-shirt in {color_name}
+{ref_text}
 
-Your task: Make the t-shirt in Image 1 look EXACTLY like the t-shirt in Image 2.
+Your task: Make the t-shirt in Image 1 look EXACTLY like the t-shirt shown in the reference image(s).
 
-CRITICAL TEXTURE DETAILS - This is garment-dyed fabric:
-1. COLOR VARIATIONS: The color is NOT uniform! Look at Image 2 carefully:
+CRITICAL - Study ALL reference images to understand the fabric:
+1. COLOR VARIATIONS: The color is NOT uniform! Look carefully:
    - There are SLIGHT color variations across the fabric (some areas slightly lighter/darker)
    - This is intentional - it's the "garment-dyed" look
    - Copy these EXACT color irregularities
@@ -1127,7 +1348,7 @@ CRITICAL TEXTURE DETAILS - This is garment-dyed fabric:
    - Has depth and dimension from the garment-dye process
 
 4. EXACT COLOR MATCHING:
-   - Study the EXACT purple/mauve tone in Image 2
+   - Study the EXACT color tone across all reference images
    - Match this EXACT hue (not darker, not lighter, not grayer)
    - Preserve the dusty, muted quality
 
@@ -1135,16 +1356,22 @@ The final result should look like someone wearing an ACTUAL Comfort Colors garme
 
 Keep person, pose, wrinkles, lighting, and background from Image 1 unchanged."""
         
-        # Call Gemini Nano Banana (image editing specialist) - Billing enabled!
-        print("  Calling Gemini Nano Banana (2.5 Flash Image)...")
+        # Build contents array with base image + ALL reference images
+        contents = [types.Part.from_bytes(data=base_data, mime_type=base_mime)]
+        
+        # Add ALL reference images
+        for ref_data, ref_mime in reference_data_list:
+            contents.append(types.Part.from_bytes(data=ref_data, mime_type=ref_mime))
+        
+        # Add prompt at the end
+        contents.append(prompt)
+        
+        # Call Gemini Nano Banana with ALL reference images
+        print(f"  Calling Gemini Nano Banana with {ref_count} reference image(s)...")
         print(f"  Brand: {brand['name']}, Product: {product['name']}, Color: {color_name}")
         response = gemini_client.models.generate_content(
             model='models/gemini-2.5-flash-image',  # Nano Banana - BEST for selective editing!
-            contents=[
-                types.Part.from_bytes(data=base_data, mime_type=base_mime),
-                types.Part.from_bytes(data=reference_data, mime_type=reference_mime),
-                prompt
-            ],
+            contents=contents,
             config=types.GenerateContentConfig(
                 temperature=0.9,  # Max creativity for texture transfer
                 response_modalities=["IMAGE"]
