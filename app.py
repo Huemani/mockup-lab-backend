@@ -1344,16 +1344,40 @@ Do not alter anything else."""
         contents.append(prompt)
         
         # Call Gemini Nano Banana PRO with ALL reference images
+        # Fallback to standard Nano Banana if Pro is unavailable
         print(f"  Calling Gemini Nano Banana PRO with {ref_count} reference image(s)...")
         print(f"  Brand: {brand['name']}, Product: {product['name']}, Color: {color_name}")
-        response = gemini_client.models.generate_content(
-            model='models/nano-banana-pro-preview',  # Nano Banana PRO - BEST results!
-            contents=contents,
-            config=types.GenerateContentConfig(
-                temperature=0.9,  # High creativity for texture transfer
-                response_modalities=["IMAGE"]
+        
+        # Try Nano Banana Pro first, fallback to standard if unavailable
+        model_to_use = 'models/nano-banana-pro-preview'
+        
+        try:
+            response = gemini_client.models.generate_content(
+                model=model_to_use,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    temperature=0.9,  # High creativity for texture transfer
+                    response_modalities=["IMAGE"]
+                )
             )
-        )
+        except Exception as e:
+            error_str = str(e)
+            if '503' in error_str or 'UNAVAILABLE' in error_str or 'high demand' in error_str:
+                print(f"  ⚠️  Nano Banana Pro unavailable (503), falling back to standard Nano Banana...")
+                model_to_use = 'models/gemini-2.5-flash-image'
+                response = gemini_client.models.generate_content(
+                    model=model_to_use,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        temperature=0.9,
+                        response_modalities=["IMAGE"]
+                    )
+                )
+            else:
+                # Re-raise if it's not a 503 error
+                raise
+        
+        print(f"  ✓ Used model: {model_to_use}")
         
         # Extract image
         print("\n→ Processing Gemini response...")
