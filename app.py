@@ -1228,7 +1228,7 @@ async def transform_garment(request: BrandColorTransformRequest):
             print(f"  Views: {', '.join(found_views)}")
         
         # Generate cache key (include view type so front/back mockups cache separately)
-        model_name = 'nano-banana-v5'  # Updated for new library photo ID structure (front_001)
+        model_name = 'nano-banana-v6'  # Ultra-clear prompt: ONLY change color, keep everything else
         cache_key = f"{request.libraryPhotoId}_{library_view}_{request.brandId}_{request.productId}_{request.colorId}_{model_name}"
         cache_folder = "cache/garment-transforms"
         
@@ -1315,46 +1315,42 @@ async def transform_garment(request: BrandColorTransformRequest):
         # Determine base mime type
         base_mime = 'image/png' if base_path.endswith('.png') else 'image/jpeg'
         
-        # Create ultra-specific prompt for MULTIPLE reference images
+        # Create ULTRA-CLEAR prompt - ONLY change t-shirt COLOR, nothing else!
         color_name = request.colorId.replace('_', ' ').title()
         
         ref_count = len(reference_data_list)
         if ref_count == 1:
-            ref_text = "Image 2: Comfort Colors garment-dyed t-shirt in {color_name}"
+            ref_text = f"Image 2: A t-shirt in {color_name} color"
         else:
-            ref_text = f"Images 2-{ref_count+1}: Multiple views of the same Comfort Colors garment-dyed t-shirt in {color_name}"
+            ref_text = f"Images 2-{ref_count+1}: Multiple views of a t-shirt in {color_name} color"
         
-        prompt = f"""You are looking at {ref_count + 1} images:
-Image 1: Person in white t-shirt
+        prompt = f"""TASK: Change ONLY the t-shirt color in Image 1.
+
+Image 1: Person wearing a white t-shirt
 {ref_text}
 
-Your task: Make the t-shirt in Image 1 look EXACTLY like the t-shirt shown in the reference image(s).
+INSTRUCTIONS:
+1. KEEP EVERYTHING from Image 1:
+   - The person (face, body, pose)
+   - The background
+   - The lighting
+   - The wrinkles and folds in the fabric
+   - Everything except the color
 
-CRITICAL - Study ALL reference images to understand the fabric:
-1. COLOR VARIATIONS: The color is NOT uniform! Look carefully:
-   - There are SLIGHT color variations across the fabric (some areas slightly lighter/darker)
-   - This is intentional - it's the "garment-dyed" look
-   - Copy these EXACT color irregularities
-   
-2. WASHED/VINTAGE APPEARANCE:
-   - The fabric looks slightly faded and lived-in
-   - NOT a bright, fresh, new t-shirt color
-   - Has a soft, washed-out quality
-   - Slightly muted/dusty tone (not saturated)
+2. CHANGE ONLY:
+   - The t-shirt color to match the {color_name} color shown in the reference images
+   - Copy the EXACT color tone, including:
+     * Color variations (garment-dyed look with slight irregularities)
+     * Muted/dusty appearance (not bright or saturated)
+     * Vintage/washed quality
 
-3. FABRIC TEXTURE:
-   - Soft cotton with visible texture
-   - Not smooth or plasticky
-   - Has depth and dimension from the garment-dye process
+3. DO NOT:
+   - Replace the person
+   - Replace the background
+   - Change the pose
+   - Change anything except the t-shirt's color
 
-4. EXACT COLOR MATCHING:
-   - Study the EXACT color tone across all reference images
-   - Match this EXACT hue (not darker, not lighter, not grayer)
-   - Preserve the dusty, muted quality
-
-The final result should look like someone wearing an ACTUAL Comfort Colors garment-dyed t-shirt that's been washed a few times.
-
-Keep person, pose, wrinkles, lighting, and background from Image 1 unchanged."""
+The result should be: The SAME person in the SAME pose, but wearing a {color_name} t-shirt instead of white."""
         
         # Build contents array with base image + ALL reference images
         contents = [types.Part.from_bytes(data=base_data, mime_type=base_mime)]
