@@ -121,7 +121,7 @@ LIBRARY_PHOTOS = {
         "type": "tshirt",
         "view": "front",
         "base_color": "white",
-        "image_url": "https://res.cloudinary.com/ducsuev69/image/upload/v1771879971/photo-001_bfwkdi.png",
+        "image_url": "https://res.cloudinary.com/ducsuev69/image/upload/v1771930556/front-001_ozb9fv.png",
         "displacement_map_url": None
     }
     # Example: Add more front views
@@ -298,7 +298,7 @@ TEST_GARMENTS = {
         "supplier": "Library",
         "sku": "LIB-FRONT-001",
         "color": "White",
-        "image_url": "https://res.cloudinary.com/ducsuev69/image/upload/v1771879971/photo-001_bfwkdi.png",
+        "image_url": "https://res.cloudinary.com/ducsuev69/image/upload/v1771930556/front-001_ozb9fv.png",
         "displacement_map_url": None
     }
 }
