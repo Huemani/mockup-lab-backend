@@ -1024,7 +1024,7 @@ async def transform_garment(request: BrandColorTransformRequest):
         reference_url = product["colors"][request.colorId]
         
         # Generate cache key (include model name for version control)
-        model_name = 'nano-banana'  # Change this if switching models
+        model_name = 'nano-banana-v2'  # Updated for texture-focused prompt
         cache_key = f"{request.libraryPhotoId}_{request.brandId}_{request.productId}_{request.colorId}_{model_name}"
         cache_folder = "cache/garment-transforms"
         
@@ -1101,17 +1101,27 @@ async def transform_garment(request: BrandColorTransformRequest):
         base_mime = 'image/png' if base_path.endswith('.png') else 'image/jpeg'
         reference_mime = 'image/webp' if reference_path.endswith('.webp') else ('image/png' if reference_path.endswith('.png') else 'image/jpeg')
         
-        # Create SIMPLE, direct transformation prompt
+        # Create prompt focused on TEXTURE TRANSFER, not just color overlay
         color_name = request.colorId.replace('_', ' ').title()
-        prompt = f"""Change the t-shirt color in the first image to match the exact color of the t-shirt in the second image.
+        prompt = f"""Look at these two images:
+Image 1: Person wearing a white t-shirt
+Image 2: {brand['name']} {product['name']} in {color_name} color
 
-Keep everything else identical - same person, same pose, same background, same lighting.
+Replace the white t-shirt in Image 1 with the EXACT t-shirt from Image 2.
 
-Only change the t-shirt color to match the {color_name} color shown in the reference image."""
+CRITICAL - This is NOT just a color change! You must:
+- Copy the FABRIC TEXTURE from the reference (garment-dyed, vintage, washed look)
+- Copy the MATERIAL APPEARANCE (soft cotton with slight color variations)
+- Match the EXACT color tone AND texture simultaneously
+- Include any subtle color irregularities that give it a lived-in feel
+
+Think of it as: "What if the person in Image 1 was wearing the ACTUAL t-shirt from Image 2?"
+
+Keep the person, pose, lighting, and background from Image 1 completely unchanged."""
         
         # Call Gemini Nano Banana (image editing specialist) - Billing enabled!
         print("  Calling Gemini Nano Banana (2.5 Flash Image)...")
-        print(f"  Prompt: {prompt[:100]}...")
+        print(f"  Brand: {brand['name']}, Product: {product['name']}, Color: {color_name}")
         response = gemini_client.models.generate_content(
             model='models/gemini-2.5-flash-image',  # Nano Banana - BEST for selective editing!
             contents=[
@@ -1120,7 +1130,7 @@ Only change the t-shirt color to match the {color_name} color shown in the refer
                 prompt
             ],
             config=types.GenerateContentConfig(
-                temperature=0.7,  # Increased from 0.3 for more creativity
+                temperature=0.8,  # Increased for more creative texture transfer
                 response_modalities=["IMAGE"]
             )
         )
