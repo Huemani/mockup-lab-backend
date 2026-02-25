@@ -1230,8 +1230,15 @@ async def transform_garment(request: BrandColorTransformRequest):
         if found_views:
             print(f"  Views: {', '.join(found_views)}")
         
-        # Model name for tracking (no caching for Option A)
-        model_name = 'nano-banana-pro-v2'  # Universal garment replacement (t-shirt→hoodie works!)
+        # Variables needed for Gemini call
+        ref_count = len(reference_urls)
+        color_name = request.colorId.replace('_', ' ').title()
+        
+        # Generate cache key - GARMENT transformations should be cached!
+        # Same colored garment for all users → cache it to save API costs
+        model_name = 'nano-banana-pro-v2'
+        cache_key = f"{request.libraryPhotoId}_{library_view}_{request.brandId}_{request.productId}_{request.colorId}_{model_name}"
+        cache_folder = "cache/garment-transforms"
         
         print(f"\n{'='*60}")
         print("GARMENT TRANSFORMATION REQUEST")
@@ -1241,9 +1248,29 @@ async def transform_garment(request: BrandColorTransformRequest):
         print(f"  Product: {product['name']}")
         print(f"  Color: {request.colorId}")
         print(f"  Model: {model_name}")
+        print(f"  Cache Key: {cache_key}")
         
-        # Option A: No caching - always generate fresh mockup (privacy-friendly!)
-        print("\n→ Generating fresh mockup (no storage, privacy-friendly)...")
+        # Check cache FIRST - avoid expensive Gemini call if already generated
+        print("\n→ Checking cache...")
+        try:
+            cached_url = f"https://res.cloudinary.com/ducsuev69/image/upload/v1/{cache_folder}/{cache_key}.png"
+            test_response = requests.head(cached_url, timeout=5)
+            if test_response.status_code == 200:
+                print(f"✓ Cache HIT! Using cached transformation")
+                print(f"  Cached URL: {cached_url}")
+                print(f"\n{'='*60}\n")
+                
+                return {
+                    "success": True,
+                    "result_url": cached_url,
+                    "cached": True,
+                    "cache_key": cache_key,
+                    "message": "Retrieved from cache"
+                }
+        except:
+            print("  Cache MISS - will generate new transformation")
+        
+        # Cache miss - generate with Gemini
         
         # Download base photo
         print("\n→ Downloading images...")
@@ -1390,20 +1417,27 @@ Do not alter anything else."""
             print(f"  Available attributes: {[attr for attr in dir(image_part) if not attr.startswith('_')]}")
             raise HTTPException(status_code=500, detail="Unexpected Gemini response format")
         
-        # Option A: Return as base64 (NO storage - privacy-friendly!)
-        print(f"\n→ Encoding result as base64...")
+        # Upload to Cloudinary cache - this is shared across all users
+        print(f"\n→ Caching result to Cloudinary...")
+        print(f"  Cache folder: {cache_folder}")
+        print(f"  Cache key: {cache_key}")
         
-        import base64
-        result_base64 = base64.b64encode(image_data).decode('utf-8')
+        result = cloudinary.uploader.upload(
+            image_data,
+            folder=cache_folder,
+            public_id=cache_key,
+            resource_type="image",
+            overwrite=True  # Overwrite if exists
+        )
         
-        print(f"  ✓ Encoded successfully!")
-        print(f"  Size: {len(result_base64)} characters")
+        result_url = result['secure_url']
+        print(f"✓ Cached: {result_url}")
         
         # Cleanup temp files
         try:
             os.remove(base_path)
-        except Exception as e:
-            print(f"  Warning: Could not delete temp file: {e}")
+        except:
+            pass
         
         print(f"\n{'='*60}")
         print("TRANSFORMATION COMPLETE")
@@ -1411,13 +1445,10 @@ Do not alter anything else."""
         
         return {
             "success": True,
-            "image_base64": result_base64,
-            "mime_type": "image/png",
-            "brand": brand["name"],
-            "product": product["name"],
-            "color": color_name,
-            "model_used": model_to_use,
-            "message": "Image returned as base64 - not stored on server"
+            "result_url": result_url,
+            "cached": False,
+            "cache_key": cache_key,
+            "message": f"Transformed to {brand['name']} {product['name']} - {color_name}"
         }
         
     except Exception as e:
@@ -1794,7 +1825,7 @@ async def generate_mockup(request: MockupRequest):
         result = alpha_composite_design(tshirt_with_shadow, warped_design, tshirt_bgr, request.shadowStrength, request.opacity)
         print("✓ Composite complete")
 
-        # --- 7. Upload to Cloudinary ---
+        # --- 7. Return as base64 (Privacy: Don't store user's final mockup!) ---
         result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
         result_pil = Image.fromarray(result_rgb)
 
@@ -1802,21 +1833,20 @@ async def generate_mockup(request: MockupRequest):
         result_pil.save(buffer, format="PNG")
         buffer.seek(0)
 
-        print("→ Uploading to Cloudinary...")
-
-        if not (CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET):
-            raise HTTPException(status_code=500, detail="Cloudinary not configured")
-
-        upload_result = cloudinary.uploader.upload(
-            buffer,
-            folder="mockups/user-uploads",
-            resource_type="image"
-        )
-
-        print(f"✓ Upload successful: {upload_result['secure_url']}")
+        print("→ Encoding result as base64...")
+        
+        import base64
+        result_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        
+        print(f"✓ Encoded successfully ({len(result_base64)} chars)")
         print(f"{'='*60}\n")
 
-        return upload_result['secure_url']
+        return {
+            "success": True,
+            "image_base64": result_base64,
+            "mime_type": "image/png",
+            "message": "Mockup generated - not stored on server"
+        }
 
     except requests.RequestException as e:
         print(f"\n✗ ERROR downloading images: {str(e)}\n")
