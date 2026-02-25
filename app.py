@@ -1838,12 +1838,16 @@ async def generate_mockup(request: MockupRequest):
         import base64
         result_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
         
+        # Create data URL for frontend compatibility
+        mockup_data_url = f"data:image/png;base64,{result_base64}"
+        
         print(f"✓ Encoded successfully ({len(result_base64)} chars)")
         print(f"{'='*60}\n")
 
         return {
             "success": True,
-            "image_base64": result_base64,
+            "mockupUrl": mockup_data_url,  # Data URL (ready to use in <img src="">)
+            "image_base64": result_base64,  # Raw base64 (if needed)
             "mime_type": "image/png",
             "message": "Mockup generated - not stored on server"
         }
