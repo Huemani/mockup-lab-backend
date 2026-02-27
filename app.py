@@ -1236,7 +1236,7 @@ async def transform_garment(request: BrandColorTransformRequest):
         
         # Generate cache key - GARMENT transformations should be cached!
         # Same colored garment for all users → cache it to save API costs
-        model_name = 'nano-banana-2-v1'  # Gemini 3.1 Flash Image (launched Feb 26, 2026)
+        model_name = 'gemini-3-pro-image-v2'  # Back to Nano Banana Pro
         cache_key = f"{request.libraryPhotoId}_{library_view}_{request.brandId}_{request.productId}_{request.colorId}_{model_name}"
         cache_folder = "cache/garment-transforms"
         
@@ -1348,13 +1348,13 @@ Do not alter anything else."""
         # Add prompt at the end
         contents.append(prompt)
         
-        # Call Gemini 3.1 Flash Image (aka "Nano Banana 2")
-        # Official model name: gemini-3.1-flash-image-preview
-        # Launched Feb 26, 2026 - combines Pro quality with Flash speed!
-        print(f"  Calling Gemini 3.1 Flash Image (Nano Banana 2) with {ref_count} reference image(s)...")
+        # Call Gemini 3 Pro Image (aka "Nano Banana Pro")
+        # Official model name: gemini-3-pro-image-preview
+        # Slower but WORKS - no timeout issues
+        print(f"  Calling Gemini 3 Pro Image (Nano Banana Pro) with {ref_count} reference image(s)...")
         print(f"  Brand: {brand['name']}, Product: {product['name']}, Color: {color_name}")
         
-        model_to_use = 'gemini-3.1-flash-image-preview'  # Note: -preview suffix required!
+        model_to_use = 'gemini-3-pro-image-preview'  # Back to Pro - proven to work!
         
         try:
             response = gemini_client.models.generate_content(
