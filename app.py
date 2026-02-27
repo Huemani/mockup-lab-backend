@@ -1236,7 +1236,7 @@ async def transform_garment(request: BrandColorTransformRequest):
         
         # Generate cache key - GARMENT transformations should be cached!
         # Same colored garment for all users → cache it to save API costs
-        model_name = 'nano-banana-pro-v2'
+        model_name = 'nano-banana-2-v1'  # Gemini 3.1 Flash Image (launched Feb 26, 2026)
         cache_key = f"{request.libraryPhotoId}_{library_view}_{request.brandId}_{request.productId}_{request.colorId}_{model_name}"
         cache_folder = "cache/garment-transforms"
         
@@ -1348,13 +1348,13 @@ Do not alter anything else."""
         # Add prompt at the end
         contents.append(prompt)
         
-        # Call Gemini Nano Banana PRO
-        # Note: Don't set timeout in http_options - can cause immediate 500 errors
-        # Default timeout is adequate for image generation
-        print(f"  Calling Gemini Nano Banana PRO with {ref_count} reference image(s)...")
+        # Call Gemini 3.1 Flash Image (aka "Nano Banana 2")
+        # Official model name: gemini-3.1-flash-image
+        # Launched Feb 26, 2026 - combines Pro quality with Flash speed!
+        print(f"  Calling Gemini 3.1 Flash Image (Nano Banana 2) with {ref_count} reference image(s)...")
         print(f"  Brand: {brand['name']}, Product: {product['name']}, Color: {color_name}")
         
-        model_to_use = 'models/nano-banana-pro-preview'
+        model_to_use = 'gemini-3.1-flash-image'  # Nano Banana 2 - Pro quality at Flash speeds!
         
         try:
             response = gemini_client.models.generate_content(
@@ -1363,7 +1363,6 @@ Do not alter anything else."""
                 config=types.GenerateContentConfig(
                     temperature=0.9,  # High creativity for texture transfer
                     response_modalities=["IMAGE"]
-                    # Note: Removed http_options - causes ClientError in some SDK versions
                 )
             )
             print(f"  ✓ Used model: {model_to_use}")
