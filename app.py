@@ -1279,7 +1279,7 @@ def _process_transform_job(job_id: str, request: BrandColorTransformRequest):
         
         # Generate cache key - GARMENT transformations should be cached!
         # Same colored garment for all users → cache it to save API costs
-        model_name = 'gemini-3-pro-image-preview'  # Nano Banana Pro (consistent with API call)
+        model_name = 'gemini-2.5-flash-image'  # Nano Banana (correct model)
         cache_key = f"{request.libraryPhotoId}_{library_view}_{request.brandId}_{request.productId}_{request.colorId}_{model_name}"
         cache_folder = "cache/garment-transforms"
         
@@ -1390,17 +1390,17 @@ Do not alter anything else."""
         for ref_data, ref_mime in reference_data_list:
             contents.append(types.Part.from_bytes(data=ref_data, mime_type=ref_mime))
         
-        # Add prompt at the end (wrapped in Part!)
-        contents.append(types.Part.from_text(text=prompt))
+        # Add prompt at the end (as plain string, like test endpoint)
+        contents.append(prompt)
         
         print(f"  ✓ Contents prepared: {len(contents)} parts (images + prompt)")
         
         # Call Gemini 3 Pro Image (aka "Nano Banana Pro")
-        # Official model name: gemini-3-pro-image-preview
+        # Official model name: gemini-2.5-flash-image
         # Best quality for garment color transformation
-        model_to_use = 'gemini-3-pro-image-preview'  # Declare FIRST!
+        model_to_use = 'models/gemini-2.5-flash-image'  # NANO BANANA - CORRECT!
         
-        print(f"  Calling Gemini 3 Pro Image (Nano Banana Pro) with {ref_count} reference image(s)...")
+        print(f"  Calling Nano Banana (gemini-2.5-flash-image) with {ref_count} reference image(s)...")
         print(f"  Brand: {brand['name']}, Product: {product['name']}, Color: {color_name}")
         print(f"  Model: {model_to_use}")
         print(f"  Contents: {len(contents)} parts total")
@@ -1417,7 +1417,7 @@ Do not alter anything else."""
                 model=model_to_use,
                 contents=contents,
                 config=types.GenerateContentConfig(
-                    temperature=0.9,
+                    temperature=0.3,  # LOW for precision (NOT 0.9!)
                     response_modalities=["IMAGE"]
                 )
             )
