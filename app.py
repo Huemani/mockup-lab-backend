@@ -10,10 +10,42 @@ from cloudinary import Search
 from io import BytesIO
 import os
 from PIL import Image
-from typing import Optional
+from typing import Optional, Dict, Any
 import requests
 from google import genai
 from google.genai import types
+import asyncio
+from datetime import datetime
+import uuid
+from enum import Enum
+
+# Job Queue System
+class JobStatus(str, Enum):
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    COMPLETE = "complete"
+    FAILED = "failed"
+
+class Job(BaseModel):
+    job_id: str
+    status: JobStatus
+    created_at: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    progress: int = 0  # 0-100
+    result_url: Optional[str] = None
+    error: Optional[str] = None
+    # Original request data
+    library_photo_id: str
+    brand_id: str
+    product_id: str
+    color_id: str
+
+# In-memory job storage (can upgrade to Redis later)
+jobs: Dict[str, Job] = {}
+
+# Background task queue
+background_tasks: Dict[str, asyncio.Task] = {}
 
 # Initialize FastAPI
 app = FastAPI(
@@ -1101,33 +1133,26 @@ async def get_color_reference(brand_id: str, product_id: str, color_id: str):
         )
 
 
-@app.post("/transform-garment")
-async def transform_garment(request: BrandColorTransformRequest):
+async def _process_transform_job(job_id: str, request: BrandColorTransformRequest):
     """
-    Transform library photo to selected brand/product/color.
-    Uses caching to avoid re-running Gemini for same transformations.
+    Internal worker function that processes garment transformation.
+    Updates job status as it progresses.
     """
     try:
+        # Update job to processing
+        jobs[job_id].status = JobStatus.PROCESSING
+        jobs[job_id].started_at = datetime.utcnow().isoformat()
+        jobs[job_id].progress = 10
+        
         if not gemini_client:
-            raise HTTPException(
-                status_code=503,
-                detail="Gemini AI not configured. Set GOOGLE_API_KEY environment variable."
-            )
+            jobs[job_id].status = JobStatus.FAILED
+            jobs[job_id].completed_at = datetime.utcnow().isoformat()
+            jobs[job_id].error = "Gemini AI not configured"
+            return
         
-        # Validate inputs
-        if request.libraryPhotoId not in LIBRARY_PHOTOS:
-            raise HTTPException(status_code=404, detail="Library photo not found")
-        
-        if request.brandId not in BRAND_REFERENCES:
-            raise HTTPException(status_code=404, detail="Brand not found")
-        
+        # Get validated data (already validated in public endpoint)
         brand = BRAND_REFERENCES[request.brandId]
-        if request.productId not in brand["products"]:
-            raise HTTPException(status_code=404, detail="Product not found")
-        
         product = brand["products"][request.productId]
-        if request.colorId not in product["colors"]:
-            raise HTTPException(status_code=404, detail="Color not found")
         
         # Get base photo info
         library_photo = LIBRARY_PHOTOS[request.libraryPhotoId]
@@ -1221,10 +1246,11 @@ async def transform_garment(request: BrandColorTransformRequest):
                 reference_urls = [search_result['resources'][0]['secure_url']]
                 print(f"  ✓ Found legacy file")
             else:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No reference images found for {request.brandId}/{request.productId}/{request.colorId}"
-                )
+                print(f"  ❌ No reference images found!")
+                jobs[job_id].status = JobStatus.FAILED
+                jobs[job_id].completed_at = datetime.utcnow().isoformat()
+                jobs[job_id].error = f"No reference images found for {request.colorId}"
+                return
         
         print(f"\n  Total: {len(reference_urls)} reference image(s) selected")
         if found_views:
@@ -1236,7 +1262,7 @@ async def transform_garment(request: BrandColorTransformRequest):
         
         # Generate cache key - GARMENT transformations should be cached!
         # Same colored garment for all users → cache it to save API costs
-        model_name = 'gemini-3-pro-image-v2'  # Back to Nano Banana Pro
+        model_name = 'gemini-3-pro-image-v2'  # Nano Banana Pro
         cache_key = f"{request.libraryPhotoId}_{library_view}_{request.brandId}_{request.productId}_{request.colorId}_{model_name}"
         cache_folder = "cache/garment-transforms"
         
@@ -1252,6 +1278,7 @@ async def transform_garment(request: BrandColorTransformRequest):
         
         # Check cache FIRST - avoid expensive Gemini call if already generated
         print("\n→ Checking cache...")
+        jobs[job_id].progress = 20
         try:
             cached_url = f"https://res.cloudinary.com/ducsuev69/image/upload/v1/{cache_folder}/{cache_key}.png"
             test_response = requests.head(cached_url, timeout=5)
@@ -1260,13 +1287,13 @@ async def transform_garment(request: BrandColorTransformRequest):
                 print(f"  Cached URL: {cached_url}")
                 print(f"\n{'='*60}\n")
                 
-                return {
-                    "success": True,
-                    "result_url": cached_url,
-                    "cached": True,
-                    "cache_key": cache_key,
-                    "message": "Retrieved from cache"
-                }
+                # Mark job as complete
+                jobs[job_id].status = JobStatus.COMPLETE
+                jobs[job_id].completed_at = datetime.utcnow().isoformat()
+                jobs[job_id].progress = 100
+                jobs[job_id].result_url = cached_url
+                
+                return
         except:
             print("  Cache MISS - will generate new transformation")
         
@@ -1274,6 +1301,7 @@ async def transform_garment(request: BrandColorTransformRequest):
         
         # Download base photo
         print("\n→ Downloading images...")
+        jobs[job_id].progress = 30
         print(f"  Base photo...")
         base_response = requests.get(base_photo_url, timeout=30)
         base_response.raise_for_status()
@@ -1350,11 +1378,13 @@ Do not alter anything else."""
         
         # Call Gemini 3 Pro Image (aka "Nano Banana Pro")
         # Official model name: gemini-3-pro-image-preview
-        # Slower but WORKS - no timeout issues
+        # Best quality for garment color transformation
         print(f"  Calling Gemini 3 Pro Image (Nano Banana Pro) with {ref_count} reference image(s)...")
         print(f"  Brand: {brand['name']}, Product: {product['name']}, Color: {color_name}")
         
-        model_to_use = 'gemini-3-pro-image-preview'  # Back to Pro - proven to work!
+        jobs[job_id].progress = 40  # Starting AI generation
+        
+        model_to_use = 'gemini-3-pro-image-preview'  # Highest quality!
         
         try:
             response = gemini_client.models.generate_content(
@@ -1366,6 +1396,8 @@ Do not alter anything else."""
                 )
             )
             print(f"  ✓ Used model: {model_to_use}")
+            
+            jobs[job_id].progress = 80  # AI generation complete
             
         except Exception as e:
             error_str = str(e)
@@ -1384,45 +1416,33 @@ Do not alter anything else."""
             
             if is_503 or is_unavailable or is_high_demand:
                 print(f"  → Detected as genuine service unavailability")
-                raise HTTPException(
-                    status_code=503,
-                    detail={
-                        "error": "AI_UNAVAILABLE",
-                        "message": "AI service is temporarily busy. Please try again in a moment.",
-                        "retry_after": 30
-                    }
-                )
+                jobs[job_id].status = JobStatus.FAILED
+                jobs[job_id].completed_at = datetime.utcnow().isoformat()
+                jobs[job_id].error = "AI service temporarily busy"
+                return
             
             # Timeout errors - different message
             if 'timeout' in error_str.lower() or error_type == 'TimeoutError':
                 print(f"  → Detected as timeout (generation took too long)")
-                raise HTTPException(
-                    status_code=504,
-                    detail={
-                        "error": "GENERATION_TIMEOUT",
-                        "message": "Image generation took too long. This is unusual - please try again.",
-                        "retry_after": 10
-                    }
-                )
+                jobs[job_id].status = JobStatus.FAILED
+                jobs[job_id].completed_at = datetime.utcnow().isoformat()
+                jobs[job_id].error = "Generation took too long - please try again"
+                return
             
             # Rate limit errors
             if 'rate limit' in error_str.lower() or 'quota' in error_str.lower():
                 print(f"  → Detected as rate limit")
-                raise HTTPException(
-                    status_code=429,
-                    detail={
-                        "error": "RATE_LIMIT",
-                        "message": "Too many requests. Please wait a moment.",
-                        "retry_after": 60
-                    }
-                )
+                jobs[job_id].status = JobStatus.FAILED
+                jobs[job_id].completed_at = datetime.utcnow().isoformat()
+                jobs[job_id].error = "Rate limit exceeded - please wait a moment"
+                return
             
-            # Other errors - re-raise with details
-            print(f"  → Unknown error, re-raising")
-            raise HTTPException(
-                status_code=500,
-                detail=f"AI generation failed: {error_type} - {error_str[:200]}"
-            )
+            # Other errors - set job failed
+            print(f"  → Unknown error, marking job as failed")
+            jobs[job_id].status = JobStatus.FAILED
+            jobs[job_id].completed_at = datetime.utcnow().isoformat()
+            jobs[job_id].error = f"Generation failed: {error_type}"
+            return
         
         # Extract image
         print("\n→ Processing Gemini response...")
@@ -1437,7 +1457,10 @@ Do not alter anything else."""
         if not response.candidates or not response.candidates[0].content.parts:
             print(f"  ❌ ERROR: No image in response!")
             print(f"  Full response: {response}")
-            raise HTTPException(status_code=500, detail="No image returned from Gemini")
+            jobs[job_id].status = JobStatus.FAILED
+            jobs[job_id].completed_at = datetime.utcnow().isoformat()
+            jobs[job_id].error = "No image returned from AI"
+            return
         
         image_part = response.candidates[0].content.parts[0]
         print(f"  Part type: {type(image_part)}")
@@ -1455,12 +1478,17 @@ Do not alter anything else."""
         else:
             print(f"  ❌ ERROR: Unknown response format!")
             print(f"  Available attributes: {[attr for attr in dir(image_part) if not attr.startswith('_')]}")
-            raise HTTPException(status_code=500, detail="Unexpected Gemini response format")
+            jobs[job_id].status = JobStatus.FAILED
+            jobs[job_id].completed_at = datetime.utcnow().isoformat()
+            jobs[job_id].error = "Unexpected AI response format"
+            return
         
         # Upload to Cloudinary cache - this is shared across all users
         print(f"\n→ Caching result to Cloudinary...")
         print(f"  Cache folder: {cache_folder}")
         print(f"  Cache key: {cache_key}")
+        
+        jobs[job_id].progress = 90  # Uploading to cache
         
         result = cloudinary.uploader.upload(
             image_data,
@@ -1483,19 +1511,21 @@ Do not alter anything else."""
         print("TRANSFORMATION COMPLETE")
         print(f"{'='*60}\n")
         
-        return {
-            "success": True,
-            "result_url": result_url,
-            "cached": False,
-            "cache_key": cache_key,
-            "message": f"Transformed to {brand['name']} {product['name']} - {color_name}"
-        }
+        # Mark job as complete
+        jobs[job_id].status = JobStatus.COMPLETE
+        jobs[job_id].completed_at = datetime.utcnow().isoformat()
+        jobs[job_id].progress = 100
+        jobs[job_id].result_url = result_url
         
     except Exception as e:
         print(f"\n❌ ERROR: {str(e)}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        
+        # Mark job as failed
+        jobs[job_id].status = JobStatus.FAILED
+        jobs[job_id].completed_at = datetime.utcnow().isoformat()
+        jobs[job_id].error = str(e)
 
 
 @app.post("/gemini-swap-test")
@@ -1681,6 +1711,96 @@ async def gemini_swap_test(request: GeminiSwapRequest):
 # ============================================================================
 # STANDARD MOCKUP ENDPOINT
 # ============================================================================
+
+
+
+@app.post("/transform-garment")
+async def transform_garment(request: BrandColorTransformRequest):
+    """
+    Start garment transformation job.
+    Returns job_id immediately for status tracking.
+    """
+    # Validate inputs BEFORE creating job
+    if request.libraryPhotoId not in LIBRARY_PHOTOS:
+        raise HTTPException(status_code=404, detail="Library photo not found")
+    
+    if request.brandId not in BRAND_REFERENCES:
+        raise HTTPException(status_code=404, detail="Brand not found")
+    
+    brand = BRAND_REFERENCES[request.brandId]
+    if request.productId not in brand["products"]:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    product = brand["products"][request.productId]
+    if request.colorId not in product["colors"]:
+        raise HTTPException(status_code=404, detail="Color not found")
+    
+    # Create new job
+    job_id = str(uuid.uuid4())
+    
+    job = Job(
+        job_id=job_id,
+        status=JobStatus.QUEUED,
+        created_at=datetime.utcnow().isoformat(),
+        progress=0,
+        library_photo_id=request.libraryPhotoId,
+        brand_id=request.brandId,
+        product_id=request.productId,
+        color_id=request.colorId
+    )
+    
+    jobs[job_id] = job
+    
+    # Start background task
+    task = asyncio.create_task(_process_transform_job(job_id, request))
+    background_tasks[job_id] = task
+    
+    print(f"\n{'='*60}")
+    print(f"JOB CREATED: {job_id}")
+    print(f"{'='*60}")
+    print(f"  Status: {job.status}")
+    print(f"  Library Photo: {request.libraryPhotoId}")
+    print(f"  Brand: {request.brandId}")
+    print(f"  Product: {request.productId}")
+    print(f"  Color: {request.colorId}")
+    print(f"\n")
+    
+    return {
+        "job_id": job_id,
+        "status": job.status,
+        "progress": job.progress,
+        "created_at": job.created_at,
+        "message": "Transformation job started"
+    }
+
+
+@app.get("/job/{job_id}")
+async def get_job_status(job_id: str):
+    """
+    Get status of transformation job.
+    Frontend should poll this endpoint every 2-3 seconds.
+    """
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job = jobs[job_id]
+    
+    response = {
+        "job_id": job.job_id,
+        "status": job.status,
+        "progress": job.progress,
+        "created_at": job.created_at,
+        "started_at": job.started_at,
+        "completed_at": job.completed_at
+    }
+    
+    if job.status == JobStatus.COMPLETE:
+        response["result_url"] = job.result_url
+    elif job.status == JobStatus.FAILED:
+        response["error"] = job.error
+    
+    return response
+
 
 @app.post("/generate-mockup")
 async def generate_mockup(request: MockupRequest):
@@ -1906,4 +2026,12 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8080))
     print(f"\nStarting Mockup Lab API on port {port}...")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    print(f"Timeout configured: 300 seconds (5 minutes)")
+    
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=port,
+        timeout_keep_alive=300,  # 5 minutes timeout for long-running requests
+        timeout_graceful_shutdown=300  # Allow graceful shutdown
+    )
