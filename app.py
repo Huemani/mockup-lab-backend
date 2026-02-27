@@ -1230,24 +1230,25 @@ def _process_transform_job(job_id: str, request: BrandColorTransformRequest):
                 print(f"  ✓ Found {primary_view} (simple name): {url.split('/')[-1]}")
         
         # FALLBACK: Try old flat structure (backward compatibility)
+        # CRITICAL: Only get ONE reference image (same as before fallback was added)
         if not reference_urls:
             print(f"  No sub-folders found, trying flat structure...")
             
             # Try: references/{brand}/{product}/{color}-{view}.ext
             old_folder_path = f"references/{brand_folder}/{request.productId}"
             
-            for view in priority_views:
-                filename = f"{color_folder}-{view}"
-                search_result = cloudinary.Search() \
-                    .expression(f"folder:{old_folder_path} AND filename:{filename}") \
-                    .max_results(1) \
-                    .execute()
-                
-                if search_result.get('resources'):
-                    url = search_result['resources'][0]['secure_url']
-                    reference_urls.append(url)
-                    found_views.append(view)
-                    print(f"  ✓ Found {view} (flat): {url.split('/')[-1]}")
+            # ONLY try primary view (not loop through all!)
+            filename = f"{color_folder}-{primary_view}"
+            search_result = cloudinary.Search() \
+                .expression(f"folder:{old_folder_path} AND filename:{filename}") \
+                .max_results(1) \
+                .execute()
+            
+            if search_result.get('resources'):
+                url = search_result['resources'][0]['secure_url']
+                reference_urls.append(url)
+                found_views.append(primary_view)
+                print(f"  ✓ Found {primary_view} (flat): {url.split('/')[-1]}")
         
         # LAST FALLBACK: Single file without view suffix (legacy)
         if not reference_urls:
@@ -1366,22 +1367,43 @@ def _process_transform_job(job_id: str, request: BrandColorTransformRequest):
         # Determine base mime type
         base_mime = 'image/png' if base_path.endswith('.png') else 'image/jpeg'
         
-        # Use Therese's proven universal prompt - works for any garment type!
+        # Use EXACT same prompt as working test endpoint
+        # This is the proven prompt that works!
         base_garment = library_photo.get("garment_type", "t-shirt")
         target_garment_type = product.get("garment_type", "t-shirt")
         
-        # Determine garment name for prompt (e.g., "t-shirt", "hoodie", "crewneck")
-        prompt = f"""Use image 1 as the base image and replace the {base_garment} with the {target_garment_type} from the reference images.
+        prompt = f"""You are given TWO images:
+1. MAIN IMAGE (first): A person wearing a {base_garment}
+2. REFERENCE IMAGE (second): A {target_garment_type} showing the target fabric/color
 
-Transfer the exact color variation, pigment, texture, garment-dye and wash level from the reference images.
+TASK: Replace ONLY the {base_garment} garment in the MAIN image to match the {target_garment_type} in the REFERENCE image.
 
-Transfer the exact product design details and features from the reference images.
+CRITICAL REQUIREMENTS:
+1. ONLY CHANGE: The {base_garment} fabric color, texture, and material in the MAIN image
+2. MATCH REFERENCE: Copy the exact fabric appearance (color, texture, material feel) from the REFERENCE image
+3. PRESERVE EVERYTHING ELSE in the MAIN image:
+   - Keep the person's face, hair, skin tone IDENTICAL
+   - Keep the exact same pose and body position
+   - Keep all wrinkles and fabric folds in the same positions
+   - Keep the background completely unchanged
+   - Keep the lighting and shadows identical
+   - Keep any accessories (jewelry, etc.) unchanged
 
-Follow the lighting and shadows from image 1 so the new garment integrates naturally on the body.
+4. TECHNICAL PRECISION:
+   - The {target_garment_type} should look naturally worn on the person
+   - Maintain the exact same wrinkle patterns
+   - Preserve the fabric's drape and fit
+   - Keep the neckline, sleeves, and hem identical in shape
 
-Keep the same person, pose, framing and background.
+DO NOT:
+- Change the person's appearance in any way
+- Alter the pose or body position
+- Modify the background
+- Add or remove any elements
+- Change lighting or shadows
+- Alter anything except the {base_garment}'s color and texture
 
-Do not alter anything else."""
+OUTPUT: Return the MAIN image with ONLY the {base_garment} garment transformed to match the REFERENCE fabric."""
         
         # Build contents array with base image + ALL reference images
         contents = [types.Part.from_bytes(data=base_data, mime_type=base_mime)]
@@ -1393,7 +1415,20 @@ Do not alter anything else."""
         # Add prompt at the end (as plain string, like test endpoint)
         contents.append(prompt)
         
-        print(f"  ✓ Contents prepared: {len(contents)} parts (images + prompt)")
+        print(f"\n  📋 GEMINI INPUT DETAILS:")
+        print(f"  ✓ Contents prepared: {len(contents)} parts total")
+        print(f"    Part 1: Base image ({base_mime}), {len(base_data)} bytes")
+        for i, (ref_data, ref_mime) in enumerate(reference_data_list, 2):
+            print(f"    Part {i}: Reference image ({ref_mime}), {len(ref_data)} bytes")
+        print(f"    Part {len(contents)}: Prompt text, {len(prompt)} characters")
+        print(f"  First 200 chars of prompt: {prompt[:200]}...")
+        print(f"  Reference URLs sent: {len(reference_data_list)}")
+        
+        # CRITICAL: Should be 3 parts for best results (base + 1 reference + prompt)
+        if len(reference_data_list) > 1:
+            print(f"  ⚠️  WARNING: Sending {len(reference_data_list)} references - may confuse model!")
+            print(f"  ⚠️  Original working version sent only 1 reference image!")
+        
         
         # Call Gemini 3 Pro Image (aka "Nano Banana Pro")
         # Official model name: gemini-2.5-flash-image
