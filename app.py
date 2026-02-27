@@ -1140,26 +1140,39 @@ def _process_transform_job(job_id: str, request: BrandColorTransformRequest):
     Runs in separate thread to avoid FastAPI lifecycle issues.
     Updates job status as it progresses.
     """
+    print(f"\n{'='*60}")
+    print(f"WORKER THREAD STARTED: {job_id}")
+    print(f"{'='*60}\n")
+    
     try:
         # Update job to processing
+        print(f"→ Setting job to PROCESSING...")
         jobs[job_id].status = JobStatus.PROCESSING
         jobs[job_id].started_at = datetime.utcnow().isoformat()
         jobs[job_id].progress = 10
+        print(f"  ✓ Job status: {jobs[job_id].status}, Progress: {jobs[job_id].progress}%")
         
         if not gemini_client:
+            print(f"  ❌ ERROR: Gemini client not configured!")
             jobs[job_id].status = JobStatus.FAILED
             jobs[job_id].completed_at = datetime.utcnow().isoformat()
             jobs[job_id].error = "Gemini AI not configured"
             return
         
+        print(f"  ✓ Gemini client OK")
+        
         # Get validated data (already validated in public endpoint)
+        print(f"→ Fetching brand/product data...")
         brand = BRAND_REFERENCES[request.brandId]
         product = brand["products"][request.productId]
+        print(f"  ✓ Brand: {brand['name']}, Product: {product['name']}")
         
         # Get base photo info
+        print(f"→ Fetching library photo...")
         library_photo = LIBRARY_PHOTOS[request.libraryPhotoId]
         base_photo_url = library_photo["image_url"]
         library_view = library_photo.get("view", "front")  # Default to front if not specified
+        print(f"  ✓ Library photo: {request.libraryPhotoId} ({library_view} view)")
         
         # Get reference images with SMART matching based on library photo view
         print(f"\n→ Fetching reference images for {request.colorId}...")
@@ -1520,14 +1533,24 @@ Do not alter anything else."""
         jobs[job_id].result_url = result_url
         
     except Exception as e:
-        print(f"\n❌ ERROR: {str(e)}")
+        print(f"\n{'='*60}")
+        print(f"❌ WORKER THREAD EXCEPTION: {job_id}")
+        print(f"{'='*60}")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {str(e)}")
+        print(f"\nFull traceback:")
         import traceback
         traceback.print_exc()
+        print(f"{'='*60}\n")
         
         # Mark job as failed
-        jobs[job_id].status = JobStatus.FAILED
-        jobs[job_id].completed_at = datetime.utcnow().isoformat()
-        jobs[job_id].error = str(e)
+        try:
+            jobs[job_id].status = JobStatus.FAILED
+            jobs[job_id].completed_at = datetime.utcnow().isoformat()
+            jobs[job_id].error = str(e)
+            print(f"✓ Job marked as FAILED")
+        except Exception as inner_e:
+            print(f"❌ Could not update job status: {inner_e}")
 
 
 @app.post("/gemini-swap-test")
@@ -1753,14 +1776,32 @@ async def transform_garment(request: BrandColorTransformRequest):
     
     jobs[job_id] = job
     
+    print(f"\n{'='*60}")
+    print(f"STARTING BACKGROUND THREAD FOR JOB: {job_id}")
+    print(f"{'='*60}")
+    
     # Start background thread (not asyncio task - avoids FastAPI cancellation!)
-    thread = threading.Thread(
-        target=_process_transform_job,
-        args=(job_id, request),
-        daemon=True  # Daemon thread continues even after response
-    )
-    thread.start()
-    background_tasks[job_id] = thread
+    try:
+        thread = threading.Thread(
+            target=_process_transform_job,
+            args=(job_id, request),
+            daemon=True,  # Daemon thread continues even after response
+            name=f"TransformJob-{job_id[:8]}"
+        )
+        thread.start()
+        background_tasks[job_id] = thread
+        
+        print(f"✓ Thread started successfully!")
+        print(f"  Thread name: {thread.name}")
+        print(f"  Thread alive: {thread.is_alive()}")
+        print(f"  Thread daemon: {thread.daemon}")
+    except Exception as e:
+        print(f"❌ FAILED TO START THREAD: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+    
+    print(f"{'='*60}\n")
     
     print(f"\n{'='*60}")
     print(f"JOB CREATED: {job_id}")
