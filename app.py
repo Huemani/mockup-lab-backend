@@ -1348,12 +1348,11 @@ Do not alter anything else."""
         # Add prompt at the end
         contents.append(prompt)
         
-        # Call Gemini Nano Banana PRO with ALL reference images
-        # Fallback to standard Nano Banana if Pro is unavailable
+        # Call Gemini Nano Banana PRO with proper timeout
+        # Image generation can take 60-120 seconds, so set generous timeout
         print(f"  Calling Gemini Nano Banana PRO with {ref_count} reference image(s)...")
         print(f"  Brand: {brand['name']}, Product: {product['name']}, Color: {color_name}")
         
-        # Try Nano Banana Pro first, fallback to standard if unavailable
         model_to_use = 'models/nano-banana-pro-preview'
         
         try:
@@ -1362,27 +1361,70 @@ Do not alter anything else."""
                 contents=contents,
                 config=types.GenerateContentConfig(
                     temperature=0.9,  # High creativity for texture transfer
-                    response_modalities=["IMAGE"]
+                    response_modalities=["IMAGE"],
+                    # Set timeout to 5 minutes (Gemini API max)
+                    # Image generation can take 60-120 seconds
+                    http_options=types.HttpOptions(timeout=300)
                 )
             )
+            print(f"  ✓ Used model: {model_to_use}")
+            
         except Exception as e:
             error_str = str(e)
-            if '503' in error_str or 'UNAVAILABLE' in error_str or 'high demand' in error_str:
-                print(f"  ⚠️  Nano Banana Pro unavailable (503), falling back to standard Nano Banana...")
-                model_to_use = 'models/gemini-2.5-flash-image'
-                response = gemini_client.models.generate_content(
-                    model=model_to_use,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        temperature=0.9,
-                        response_modalities=["IMAGE"]
-                    )
+            error_type = type(e).__name__
+            
+            # Log detailed error info for debugging
+            print(f"  ❌ Gemini API Error:")
+            print(f"     Type: {error_type}")
+            print(f"     Message: {error_str[:500]}")  # First 500 chars
+            
+            # Check if it's ACTUALLY a 503/unavailable error
+            # (not timeout, not rate limit, not other errors)
+            is_503 = '503' in error_str
+            is_unavailable = 'UNAVAILABLE' in error_str.upper() and 'timeout' not in error_str.lower()
+            is_high_demand = 'high demand' in error_str.lower()
+            
+            if is_503 or is_unavailable or is_high_demand:
+                print(f"  → Detected as genuine service unavailability")
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": "AI_UNAVAILABLE",
+                        "message": "AI service is temporarily busy. Please try again in a moment.",
+                        "retry_after": 30
+                    }
                 )
-            else:
-                # Re-raise if it's not a 503 error
-                raise
-        
-        print(f"  ✓ Used model: {model_to_use}")
+            
+            # Timeout errors - different message
+            if 'timeout' in error_str.lower() or error_type == 'TimeoutError':
+                print(f"  → Detected as timeout (generation took too long)")
+                raise HTTPException(
+                    status_code=504,
+                    detail={
+                        "error": "GENERATION_TIMEOUT",
+                        "message": "Image generation took too long. This is unusual - please try again.",
+                        "retry_after": 10
+                    }
+                )
+            
+            # Rate limit errors
+            if 'rate limit' in error_str.lower() or 'quota' in error_str.lower():
+                print(f"  → Detected as rate limit")
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "error": "RATE_LIMIT",
+                        "message": "Too many requests. Please wait a moment.",
+                        "retry_after": 60
+                    }
+                )
+            
+            # Other errors - re-raise with details
+            print(f"  → Unknown error, re-raising")
+            raise HTTPException(
+                status_code=500,
+                detail=f"AI generation failed: {error_type}"
+            )
         
         # Extract image
         print("\n→ Processing Gemini response...")
