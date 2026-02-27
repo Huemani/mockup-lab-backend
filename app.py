@@ -1349,12 +1349,12 @@ Do not alter anything else."""
         contents.append(prompt)
         
         # Call Gemini 3.1 Flash Image (aka "Nano Banana 2")
-        # Official model name: gemini-3.1-flash-image
+        # Official model name: gemini-3.1-flash-image-preview
         # Launched Feb 26, 2026 - combines Pro quality with Flash speed!
         print(f"  Calling Gemini 3.1 Flash Image (Nano Banana 2) with {ref_count} reference image(s)...")
         print(f"  Brand: {brand['name']}, Product: {product['name']}, Color: {color_name}")
         
-        model_to_use = 'gemini-3.1-flash-image'  # Nano Banana 2 - Pro quality at Flash speeds!
+        model_to_use = 'gemini-3.1-flash-image-preview'  # Note: -preview suffix required!
         
         try:
             response = gemini_client.models.generate_content(
