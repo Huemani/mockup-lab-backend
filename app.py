@@ -1348,8 +1348,9 @@ Do not alter anything else."""
         # Add prompt at the end
         contents.append(prompt)
         
-        # Call Gemini Nano Banana PRO with proper timeout
-        # Image generation can take 60-120 seconds, so set generous timeout
+        # Call Gemini Nano Banana PRO
+        # Note: Don't set timeout in http_options - can cause immediate 500 errors
+        # Default timeout is adequate for image generation
         print(f"  Calling Gemini Nano Banana PRO with {ref_count} reference image(s)...")
         print(f"  Brand: {brand['name']}, Product: {product['name']}, Color: {color_name}")
         
@@ -1361,10 +1362,8 @@ Do not alter anything else."""
                 contents=contents,
                 config=types.GenerateContentConfig(
                     temperature=0.9,  # High creativity for texture transfer
-                    response_modalities=["IMAGE"],
-                    # Set timeout to 5 minutes (Gemini API max)
-                    # Image generation can take 60-120 seconds
-                    http_options=types.HttpOptions(timeout=300)
+                    response_modalities=["IMAGE"]
+                    # Note: Removed http_options - causes ClientError in some SDK versions
                 )
             )
             print(f"  ✓ Used model: {model_to_use}")
@@ -1423,7 +1422,7 @@ Do not alter anything else."""
             print(f"  → Unknown error, re-raising")
             raise HTTPException(
                 status_code=500,
-                detail=f"AI generation failed: {error_type}"
+                detail=f"AI generation failed: {error_type} - {error_str[:200]}"
             )
         
         # Extract image
