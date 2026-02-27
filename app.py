@@ -1398,6 +1398,8 @@ Do not alter anything else."""
         # Call Gemini 3 Pro Image (aka "Nano Banana Pro")
         # Official model name: gemini-3-pro-image-preview
         # Best quality for garment color transformation
+        model_to_use = 'gemini-3-pro-image-preview'  # Declare FIRST!
+        
         print(f"  Calling Gemini 3 Pro Image (Nano Banana Pro) with {ref_count} reference image(s)...")
         print(f"  Brand: {brand['name']}, Product: {product['name']}, Color: {color_name}")
         print(f"  Model: {model_to_use}")
@@ -1405,13 +1407,9 @@ Do not alter anything else."""
         
         jobs[job_id].progress = 40  # Starting AI generation
         
-        model_to_use = 'gemini-3-pro-image-preview'  # Highest quality!
-        
         print(f"\n  ⏱️  Starting Gemini API call (max 180s timeout)...")
         print(f"  Time: {datetime.utcnow().isoformat()}")
         start_time = time.time()
-        
-        print(f"  ⏱️  Setting 180 second timeout for Gemini API...")
         
         # Wrap Gemini call with timeout (180 seconds = 3 minutes max)
         def call_gemini():
