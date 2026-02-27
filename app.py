@@ -1,5 +1,5 @@
 # app.py - Main backend application
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import cv2
@@ -18,6 +18,7 @@ import asyncio
 from datetime import datetime
 import uuid
 from enum import Enum
+import threading
 
 # Job Queue System
 class JobStatus(str, Enum):
@@ -1133,9 +1134,10 @@ async def get_color_reference(brand_id: str, product_id: str, color_id: str):
         )
 
 
-async def _process_transform_job(job_id: str, request: BrandColorTransformRequest):
+def _process_transform_job(job_id: str, request: BrandColorTransformRequest):
     """
-    Internal worker function that processes garment transformation.
+    Worker function that processes garment transformation.
+    Runs in separate thread to avoid FastAPI lifecycle issues.
     Updates job status as it progresses.
     """
     try:
@@ -1751,9 +1753,14 @@ async def transform_garment(request: BrandColorTransformRequest):
     
     jobs[job_id] = job
     
-    # Start background task
-    task = asyncio.create_task(_process_transform_job(job_id, request))
-    background_tasks[job_id] = task
+    # Start background thread (not asyncio task - avoids FastAPI cancellation!)
+    thread = threading.Thread(
+        target=_process_transform_job,
+        args=(job_id, request),
+        daemon=True  # Daemon thread continues even after response
+    )
+    thread.start()
+    background_tasks[job_id] = thread
     
     print(f"\n{'='*60}")
     print(f"JOB CREATED: {job_id}")
