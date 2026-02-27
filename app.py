@@ -19,6 +19,8 @@ from datetime import datetime
 import uuid
 from enum import Enum
 import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+import time
 
 # Job Queue System
 class JobStatus(str, Enum):
@@ -1277,7 +1279,7 @@ def _process_transform_job(job_id: str, request: BrandColorTransformRequest):
         
         # Generate cache key - GARMENT transformations should be cached!
         # Same colored garment for all users → cache it to save API costs
-        model_name = 'gemini-3-pro-image-v2'  # Nano Banana Pro
+        model_name = 'gemini-3-pro-image-preview'  # Nano Banana Pro (consistent with API call)
         cache_key = f"{request.libraryPhotoId}_{library_view}_{request.brandId}_{request.productId}_{request.colorId}_{model_name}"
         cache_folder = "cache/garment-transforms"
         
@@ -1388,28 +1390,58 @@ Do not alter anything else."""
         for ref_data, ref_mime in reference_data_list:
             contents.append(types.Part.from_bytes(data=ref_data, mime_type=ref_mime))
         
-        # Add prompt at the end
-        contents.append(prompt)
+        # Add prompt at the end (wrapped in Part!)
+        contents.append(types.Part.from_text(text=prompt))
+        
+        print(f"  ✓ Contents prepared: {len(contents)} parts (images + prompt)")
         
         # Call Gemini 3 Pro Image (aka "Nano Banana Pro")
         # Official model name: gemini-3-pro-image-preview
         # Best quality for garment color transformation
         print(f"  Calling Gemini 3 Pro Image (Nano Banana Pro) with {ref_count} reference image(s)...")
         print(f"  Brand: {brand['name']}, Product: {product['name']}, Color: {color_name}")
+        print(f"  Model: {model_to_use}")
+        print(f"  Contents: {len(contents)} parts total")
         
         jobs[job_id].progress = 40  # Starting AI generation
         
         model_to_use = 'gemini-3-pro-image-preview'  # Highest quality!
         
-        try:
-            response = gemini_client.models.generate_content(
+        print(f"\n  ⏱️  Starting Gemini API call (max 180s timeout)...")
+        print(f"  Time: {datetime.utcnow().isoformat()}")
+        start_time = time.time()
+        
+        print(f"  ⏱️  Setting 180 second timeout for Gemini API...")
+        
+        # Wrap Gemini call with timeout (180 seconds = 3 minutes max)
+        def call_gemini():
+            return gemini_client.models.generate_content(
                 model=model_to_use,
                 contents=contents,
                 config=types.GenerateContentConfig(
-                    temperature=0.9,  # High creativity for texture transfer
+                    temperature=0.9,
                     response_modalities=["IMAGE"]
                 )
             )
+        
+        try:
+            # Execute with timeout
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(call_gemini)
+                try:
+                    response = future.result(timeout=180)  # 3 minute timeout
+                    elapsed = time.time() - start_time
+                    print(f"\n  ✓ Gemini responded successfully!")
+                    print(f"  ⏱️  API call took: {elapsed:.1f} seconds")
+                    print(f"  Time: {datetime.utcnow().isoformat()}")
+                except FuturesTimeoutError:
+                    elapsed = time.time() - start_time
+                    print(f"\n  ❌ Gemini API timeout after {elapsed:.1f} seconds!")
+                    print(f"  Time: {datetime.utcnow().isoformat()}")
+                    jobs[job_id].status = JobStatus.FAILED
+                    jobs[job_id].completed_at = datetime.utcnow().isoformat()
+                    jobs[job_id].error = "AI generation took too long (timeout after 3 minutes)"
+                    return
             print(f"  ✓ Used model: {model_to_use}")
             
             jobs[job_id].progress = 80  # AI generation complete
@@ -1487,7 +1519,7 @@ Do not alter anything else."""
             print(f"  ✓ Using inline_data: {len(image_data)} bytes")
         elif hasattr(image_part, 'file_data'):
             print(f"  Fetching from URI: {image_part.file_data.file_uri}")
-            file_response = requests.get(image_part.file_data.file_uri)
+            file_response = requests.get(image_part.file_data.file_uri, timeout=60)
             image_data = file_response.content
             print(f"  ✓ Downloaded file_data: {len(image_data)} bytes")
         else:
@@ -1686,7 +1718,7 @@ async def gemini_swap_test(request: GeminiSwapRequest):
             # Image returned as file reference
             print(f"→ Image file URI: {image_part.file_data.file_uri}")
             # Download from Gemini
-            file_response = requests.get(image_part.file_data.file_uri)
+            file_response = requests.get(image_part.file_data.file_uri, timeout=60)
             image_data = file_response.content
         else:
             raise HTTPException(
